@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.14 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.15 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -315,6 +315,30 @@ D.cfg = {
     cleanupAfter   = 600,
   },
 
+  bomber = {
+    enabled        = true,
+    maxActive      = 1,
+    autoSpawn      = false,
+    autoInterval   = {2400, 4800},
+    firstDelay     = 1800,
+    distance       = {150000, 350000}, -- Luftlinie vom feindlichen Startflugplatz zum blauen Zielflugplatz (m)
+    types = {                      -- ohne Waffen: der Abwurf wird vom Skript nachgestellt (Explosionen), nur der Typ zählt
+      { type = "Tu-95MS", alt = 9000,  speed = 210, size = {2, 3}, fuel = 30000 },
+      { type = "Tu-160",  alt = 10000, speed = 250, size = {1, 2}, fuel = 30000 },
+    },
+    releaseRange   = 12000,        -- so nah am Ziel wirft ein Bomber ab (m)
+    bombs          = 8,            -- Explosionen pro Bomber
+    bombSpacing    = 120,          -- m
+    bombPower      = 250,          -- Sprengkraft je Explosion; 0 = nur Meldung, kein Schaden (Achtung: kann Objekte/geparkte Flugzeuge am Platz zerstören)
+    startOffset    = 5000,         -- Startpunkt in der Luft so weit vom Startflugplatz Richtung Ziel (m)
+    minDistPlayers = 30000,
+    reportInterval = 90,           -- s zwischen Lagemeldungen
+    intelError     = 1500,         -- Ungenauigkeit der Kartenmarkierung (m)
+    markUpdate     = 30,
+    maxTime        = 5400,
+    cleanupAfter   = 600,
+  },
+
   cap = {
     enabled      = true,
     maxActive    = 1,
@@ -409,6 +433,7 @@ D.ships         = {}
 D.convoys       = {}
 D.deeps         = {}
 D.tics          = {}
+D.bombers       = {}
 D.caps          = {}
 D.targetPool    = {}
 D.targetsTotal  = 0
@@ -416,7 +441,7 @@ D.capturedCount = 0
 D.counter       = 0
 D.markId        = 7000
 D.started       = false
-D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0 }
+D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0 }
 D.blueBases     = {}
 D.nextSam       = math.huge
 D.nextCas       = math.huge
@@ -424,6 +449,7 @@ D.nextShip      = math.huge
 D.nextConvoy    = math.huge
 D.nextDeep      = math.huge
 D.nextTic       = math.huge
+D.nextBomber    = math.huge
 D.nextCapRoll   = math.huge
 D.arms          = {}
 D.armLoopRunning = false
@@ -2300,6 +2326,167 @@ function D.deepTick(now)
   end
 end
 
+-- ----------------------------------------------------------------- Bomber abfangen
+function D.bomberMark(t)
+  if not D.cfg.mapMarks then return end
+  local p = groupPos(t.group)
+  if not p then return end
+  if t.mark then trigger.action.removeMark(t.mark) end
+  t.mark = newMarkId()
+  t.intelPos = { x = p.x + t.offX, y = p.y + t.offY }
+  trigger.action.markToCoalition(t.mark,
+    string.format("BOMBERS (±%s)", fmtDist(D.cfg.bomber.intelError)), toV3(t.intelPos), D.cfg.blueSide, true)
+end
+
+local function bomberReport(t, now, header)
+  local alive = aliveUnits(t.group)
+  local p = groupPos(t.group)
+  if #alive == 0 or not p then return end
+  local d = dist(p, t.target)
+  local eta = math.max(0, math.floor((d - D.cfg.bomber.releaseRange) / t.speed / 60 + 0.5))
+  local ip = t.intelPos or p
+  local hdg = bearingDeg(p, t.target)
+  msg(string.format("%s %dx %s, heading %03d, angels %d, approx. %s\nTarget: %s airfield – bomb release in ~%d min (%.0f km to go).",
+    header, #alive, t.typ, hdg, math.floor(t.alt * 3.28084 / 1000 + 0.5), bullseyeStr(ip), t.targetName, eta, d / 1000))
+end
+
+function D.spawnBomber(manual)
+  local cfg = D.cfg.bomber
+  if not cfg.enabled then return false end
+  if #D.bombers >= cfg.maxActive then
+    if manual then msg("BOMBER INTERCEPT: Maximum number of active taskings reached.") end
+    return false
+  end
+  if #D.blueBases == 0 then
+    if manual then msg("BOMBER INTERCEPT: No friendly airfield to threaten.") end
+    return false
+  end
+  local reds = redAirbases()
+  local players = playerPositions()
+  local R, B, S
+  for _ = 1, 80 do
+    if #reds == 0 then break end
+    local r = reds[math.random(#reds)]
+    local b = D.blueBases[math.random(#D.blueBases)]
+    local d = dist(r, b)
+    if d >= cfg.distance[1] and d <= cfg.distance[2] then
+      local hdg = math.atan2(b.y - r.y, b.x - r.x)
+      local sp = offset(r, hdg, cfg.startOffset)
+      if farFrom(sp, players, cfg.minDistPlayers) then R, B, S = r, b, sp break end
+    end
+  end
+  if not R then
+    if manual then msg("BOMBER INTERCEPT: No suitable route found – try again later.") end
+    return false
+  end
+
+  local bt = cfg.types[math.random(#cfg.types)]
+  local n = math.random(bt.size[1], bt.size[2])
+  local hdg = math.atan2(B.y - S.y, B.x - S.x)
+  local gname = nextId("BOMBER")
+  local units = {}
+  for i = 1, n do
+    local u = offset(offset(S, hdg + math.pi, 400 * (i - 1)), hdg + math.pi / 2, 350 * (i - 1))
+    units[i] = { name = gname .. "-" .. i, type = bt.type, x = u.x, y = u.y, alt = bt.alt, alt_type = "BARO",
+      speed = bt.speed, heading = hdg, skill = "High",
+      payload = { pylons = {}, fuel = bt.fuel, flare = 0, chaff = 0, gun = 0 } }
+  end
+  local tgt = { x = B.x, y = B.y }
+  coalition.addGroup(D.cfg.redCountry, Group.Category.AIRPLANE, {
+    name = gname, task = "Nothing", uncontrolled = false, units = units,
+    route = { points = { airWP(S, bt.alt, bt.speed, {}), airWP(tgt, bt.alt, bt.speed, {}),
+                         airWP(offset(tgt, hdg, 60000), bt.alt, bt.speed, {}), airWP(R, bt.alt, bt.speed, {}) } },
+  })
+  local alive = groupAliveCount(gname)
+  if alive < n then
+    reportError("Bomber", string.format("only %d of %d bombers spawned (%s) – check type names in D.cfg.bomber.types", alive, n, bt.type))
+    if alive == 0 then return false end
+  end
+  -- Bomber reagieren nicht auf Bedrohung (kein Ausweichen/Abbruch), sonst wären sie vorzeitig weg
+  timer.scheduleFunction(safe(function()
+    local g = Group.getByName(gname)
+    if g and g:isExist() then
+      local air = AI and AI.Option and AI.Option.Air
+      if air and air.id and air.val and air.val.REACTION_ON_THREAT then
+        pcall(function() g:getController():setOption(air.id.REACTION_ON_THREAT, air.val.REACTION_ON_THREAT.NO_REACTION) end)
+      end
+    end
+  end, "BomberOptions"), nil, timer.getTime() + 2)
+
+  local off = jitter({ x = 0, y = 0 }, cfg.intelError)
+  local now = timer.getTime()
+  local t = { group = gname, typ = bt.type, alt = bt.alt, speed = bt.speed, initial = alive, target = tgt,
+              targetName = B.name or "friendly", startName = R.name, spawned = now, offX = off.x, offY = off.y,
+              nextReport = now + cfg.reportInterval, nextMark = now + cfg.markUpdate }
+  D.bombers[#D.bombers + 1] = t
+  D.bomberMark(t)
+  bomberReport(t, now, string.format("BOMBER INTERCEPT: Hostile bombers departed %s –", R.name))
+  return true
+end
+
+function D.requestBomber() D.spawnBomber(true) end
+
+function D.reportBomber()
+  if #D.bombers == 0 then msg("BOMBER INTERCEPT: No active taskings.") return end
+  for _, t in ipairs(D.bombers) do bomberReport(t, timer.getTime(), "BOMBER INTERCEPT:") end
+end
+
+-- Abwurf nachstellen: eine Reihe Explosionen je lebendem Bomber über dem Zielflugplatz
+local function bomberRelease(t, now)
+  local cfg = D.cfg.bomber
+  local units = aliveUnits(t.group)
+  local delay = 0
+  if cfg.bombPower and cfg.bombPower > 0 then
+    for _, u in ipairs(units) do
+      local up = toV2(u:getPoint())
+      local hdg = math.atan2(t.target.y - up.y, t.target.x - up.x)
+      local start = offset(t.target, hdg + math.pi, 300)
+      for j = 0, cfg.bombs - 1 do
+        local p = offset(start, hdg, cfg.bombSpacing * j)
+        delay = delay + 0.4
+        timer.scheduleFunction(safe(function() trigger.action.explosion(toV3(p), cfg.bombPower) end, "Bombs"),
+          nil, now + delay)
+      end
+    end
+  end
+  msg(string.format("BOMBER INTERCEPT: %d bomber%s released over %s airfield! Intercept failed.",
+    #units, #units == 1 and "" or "s", t.targetName))
+end
+
+function D.bomberTick(now)
+  local cfg = D.cfg.bomber
+  for i = #D.bombers, 1, -1 do
+    local t = D.bombers[i]
+    local alive = groupAliveCount(t.group)
+    local verdict
+    if alive == 0 then
+      verdict = "success"
+    else
+      for _, u in ipairs(aliveUnits(t.group)) do
+        if dist(toV2(u:getPoint()), t.target) <= cfg.releaseRange then verdict = "release" break end
+      end
+      if not verdict and now - t.spawned >= cfg.maxTime then verdict = "expired" end
+    end
+    if verdict then
+      table.remove(D.bombers, i)
+      if t.mark then trigger.action.removeMark(t.mark) end
+      if verdict == "success" then
+        D.stats.bomber = D.stats.bomber + 1
+        msg(string.format("BOMBER INTERCEPT: All bombers destroyed before release – %s airfield is safe! (%d total)",
+          t.targetName, D.stats.bomber))
+      elseif verdict == "release" then
+        bomberRelease(t, now)
+      else
+        msg("BOMBER INTERCEPT: Tasking ended.")
+      end
+      scheduleCleanup({ t.group }, cfg.cleanupAfter)
+    else
+      if now >= t.nextMark then D.bomberMark(t) t.nextMark = now + cfg.markUpdate end
+      if now >= t.nextReport then bomberReport(t, now, "BOMBER INTERCEPT UPDATE:") t.nextReport = now + cfg.reportInterval end
+    end
+  end
+end
+
 -- ----------------------------------------------------------------- Troops in Contact (TIC) + JTAC
 local smokeColors = { green = "Green", orange = "Orange", white = "White", red = "Red", blue = "Blue" }
 
@@ -2908,8 +3095,8 @@ function D.reportCampaign()
 end
 
 function D.reportStats()
-  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nEnemy CAPs: %d\nAirfields: %d",
-    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.cap, D.capturedCount))
+  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nBombers intercepted: %d\nEnemy CAPs: %d\nAirfields: %d",
+    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.bomber, D.stats.cap, D.capturedCount))
 end
 
 -------------------------------------------------------------------------------
@@ -2966,6 +3153,7 @@ function D.update()
   D.convoyTick(now)
   D.deepTick(now)
   D.ticTick(now, players)
+  D.bomberTick(now)
 
   -- CAP
   for i = #D.caps, 1, -1 do
@@ -2998,6 +3186,9 @@ function D.update()
   end
   if D.cfg.tic.enabled and D.cfg.tic.autoSpawn and now >= D.nextTic then
     D.nextTic = D.spawnTic(false) and (now + randRange(D.cfg.tic.autoInterval)) or (now + 120)
+  end
+  if D.cfg.bomber.enabled and D.cfg.bomber.autoSpawn and now >= D.nextBomber then
+    D.nextBomber = D.spawnBomber(false) and (now + randRange(D.cfg.bomber.autoInterval)) or (now + 120)
   end
   if D.cfg.cap.enabled and D.cfg.cap.autoChance > 0 and now >= D.nextCapRoll then
     if #D.caps < D.cfg.cap.maxActive and math.random() < D.cfg.cap.autoChance then D.spawnCAP() end
@@ -3036,6 +3227,7 @@ function D.start()
   D.nextConvoy = now + D.cfg.convoy.firstDelay
   D.nextDeep = now + D.cfg.deepStrike.firstDelay
   D.nextTic = now + D.cfg.tic.firstDelay
+  D.nextBomber = now + D.cfg.bomber.firstDelay
   D.nextCapRoll = now + randRange(D.cfg.cap.autoInterval)
 
   timer.scheduleFunction(D.tick, nil, now + 2)
@@ -3100,6 +3292,10 @@ function D.buildMenu()
   if D.cfg.deepStrike.enabled then
     cmd(sq, "Deep Strike: Request tasking", D.requestDeepStrike)
     cmd(sq, "Deep Strike: Status", D.reportDeepStrike)
+  end
+  if D.cfg.bomber.enabled then
+    cmd(sq, "Bomber: Request intercept tasking", D.requestBomber)
+    cmd(sq, "Bomber: Status", D.reportBomber)
   end
   if D.cfg.tic.enabled then
     cmd(sq, "TIC: Request troops-in-contact tasking", D.requestTic)
@@ -3218,12 +3414,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.14 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.15 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.14 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.15 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
