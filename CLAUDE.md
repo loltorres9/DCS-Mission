@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.6). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.6 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.7). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.7 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `voice` (siehe Docstring) |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -33,7 +33,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 **Nie Dateien löschen, bevor die neue Version erfolgreich geschrieben ist** (einmal ist dadurch Arbeit verloren gegangen).
 
 ## Aufbau von `src/DynSEAD.lua`
-- `D.cfg` oben: `mode` ("airbases"/"zones"), `campaign` (activeTargets=2, samPerAO, casPerAO, Garnison),
+- `D.cfg` oben: `mode` ("airbases"/"zones"), `campaign` (activeTargets=2, samPerAO, casPerAO, Garnison, `aoSeparation` = Mindestabstand gleichzeitig aktiver AOs, damit sich die Kreise nicht überlappen; sonst wird gewartet),
   `sam` (maxActive=5, Typ-Pool, `engageRange`, `modesByType`, `armEvasion`, `relocate`, `pointDefense`),
   `elint`, `awacs` (Overlord E-3A 251 AM, immortal/invisible), `voice`, `tankers` (Texaco KC-135 Boom 255 AM 51Y,
   Arco KC-135MPRS Drogue 256 AM 52Y), `manpads`, `cas`, `cap` (4 Schwierigkeitsstufen, `D.capLoadouts`).
@@ -82,9 +82,9 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
-8. **Ship Strike (v4.6)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+8. **Ship Strike (v4.7)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
    (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
    das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
-9. **Nebenaufträge (v4.6)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
+9. **Nebenaufträge (v4.7)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
    (Konvoi, Deep-Strike-Statik `.Command Center`/`Warehouse`/`Tank`, TIC-Einheiten), `Spot.createInfraRed`/`createLaser`, Platzhalter-Koordinaten
    in `D.cfg.deepStrike.targets`. Logik wurde nur gegen einen DCS-Mock (lupa) getestet. Keine Sprachbausteine dafür.

@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.6 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.7 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -59,6 +59,7 @@ D.cfg = {
     garrisonPercent = 70,
     exclude         = {},          -- z.B. { "Mozdok", "Beslan" }
     maxDistance     = 0,           -- 0 = egal; sonst max. Entfernung zur nächsten blauen Basis
+    aoSeparation    = 85000,       -- Mindestabstand der Mittelpunkte gleichzeitig aktiver AOs (m), ca. 2 x aoRadius + Puffer: Kreise überlappen nicht
     captureDelay    = 60,
   },
 
@@ -2646,13 +2647,18 @@ function D.nextTarget()
   D.refreshBlueBases()
   local best, bestD, bestIdx = nil, math.huge, nil
   local maxD = D.cfg.campaign.maxDistance
+  local sep = D.cfg.campaign.aoSeparation or 0
   for i, name in ipairs(D.targetPool) do
     local ab = Airbase.getByName(name)
     if ab then
       local p = toV2(ab:getPoint())
       local d = math.huge
       for _, b in ipairs(D.blueBases) do d = math.min(d, dist(p, b)) end
-      if (maxD <= 0 or d <= maxD) and d < bestD then best, bestD, bestIdx = name, d, i end
+      local apart = true   -- Kreise bereits aktiver AOs (auch im Abschluss) dürfen nicht überlappen
+      for _, ao in ipairs(D.aos) do
+        if dist(p, ao) < sep then apart = false break end
+      end
+      if apart and (maxD <= 0 or d <= maxD) and d < bestD then best, bestD, bestIdx = name, d, i end
     end
   end
   if bestIdx then table.remove(D.targetPool, bestIdx) end
@@ -3113,12 +3119,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.6 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.7 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.6 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.7 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
