@@ -1,0 +1,4 @@
+*.bak
+voice/overlord_voice/
+voice/*.zip
+__pycache__/
