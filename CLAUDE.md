@@ -18,6 +18,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
 | `voice/make_overlord_voice.py` | erzeugt beim Nutzer per Edge-TTS (neuronale Stimme, `pip install edge-tts`, ffmpeg) die 111 WAV-Bausteine `ov_*.wav` + ZIP; Sandbox hat kein Internet |
+| `voice/make_overlord_voice_elevenlabs.py` | wie oben, aber mit ElevenLabs (bessere Stimme; Key nur als Umgebungsvariable `ELEVENLABS_API_KEY`); bevorzugt |
 | `voice/make_overlord_voice.ps1` | alte Variante mit Windows-Sprachausgabe (SAPI), nicht mehr bevorzugt |
 
 ## Arbeitsablauf
