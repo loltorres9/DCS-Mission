@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.18 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.19 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -321,6 +321,18 @@ D.cfg = {
     enabled        = true,
     sceneryRadius  = 150,          -- Radarstandorte mindestens so weit (m) von Szenerie-Objekten (Gebäude, Masten, ggf. Bäume) entfernt
     noZonePrefix   = "NOSAM",      -- Editor-Trigger-Zonen mit diesem Namensanfang (z. B. über Wäldern) sind für SAMs/Radare gesperrt
+    -- Gelände: nicht an steilen Hängen, nicht in Kesseln/Tälern mit hohen Bergen ringsum
+    slopeRadius    = 150,          -- Hangneigung wird auf diesem Radius (m) in 8 Richtungen gemessen
+    maxSlopeDeg    = 6,            -- steilere Standorte werden abgelehnt
+    horizonDist    = {1500, 3000, 5000},  -- Abstände (m), in denen der Horizont in 8 Richtungen geprüft wird
+    antennaHeight  = 15,           -- Höhe der Radarantenne über Grund (m)
+    maxHorizonDeg  = 6,            -- Gelände höher als dieser Erhebungswinkel blockiert die Richtung
+    maxBlockedDirs = 3,            -- ab so vielen blockierten Richtungen (von 8) wird der Standort abgelehnt
+    -- Bebauung: nicht zwischen vielen/hohen Gebäuden
+    urbanRadius    = 400,          -- ab urbanMax Szenerie-Objekten in diesem Radius (m) gilt der Ort als Stadt
+    urbanMax       = 10,
+    tallHeight     = 12,           -- Objekte mindestens so hoch (m) zählen als Hochhaus ...
+    tallRadius     = 300,          -- ... und sperren den Standort im Umkreis (m)
   },
 
   fortress = {
@@ -829,43 +841,86 @@ end
 -- Standortprüfung für SAMs/Radare: nicht in gesperrten Zonen, nicht direkt neben Gebäuden/Bäumen.
 -- DCS bietet keine direkte Wald-Abfrage; erkannt wird, was world.searchObjects(SCENERY) liefert (Gebäude, Masten, evtl. Bäume),
 -- großflächige Wälder sperrt man mit Trigger-Zonen "NOSAM*" im Editor. Wirkt nur im ersten Durchlauf von findSpot (weich).
-D.siting = { tested = 0, scenery = 0, zone = 0, apiFailed = false, noZones = nil }
+D.siting = { tested = 0, scenery = 0, zone = 0, slope = 0, horizon = 0, urban = 0, apiFailed = false, noZones = nil }
 
 function D.samSpotClear(p)
   local c = D.cfg.siting
   if not c or not c.enabled then return true end
-  D.siting.tested = D.siting.tested + 1
+  local st = D.siting
+  st.tested = st.tested + 1
 
-  if D.siting.noZones == nil then
-    D.siting.noZones = {}
+  if st.noZones == nil then
+    st.noZones = {}
     local mz = env.mission and env.mission.triggers and env.mission.triggers.zones or {}
     for _, z in pairs(mz) do
       if type(z) == "table" and z.name and z.name:sub(1, #c.noZonePrefix) == c.noZonePrefix then
         local tz = trigger.misc.getZone(z.name)
         if tz and tz.radius and tz.radius > 0 then
-          D.siting.noZones[#D.siting.noZones + 1] = { x = tz.point.x, y = tz.point.z, r = tz.radius }
+          st.noZones[#st.noZones + 1] = { x = tz.point.x, y = tz.point.z, r = tz.radius }
         end
       end
     end
   end
-  for _, z in ipairs(D.siting.noZones) do
-    if dist(p, z) < z.r then D.siting.zone = D.siting.zone + 1 return false end
+  for _, z in ipairs(st.noZones) do
+    if dist(p, z) < z.r then st.zone = st.zone + 1 return false end
   end
 
+  -- Gelände: Hangneigung und Horizont (Berge ringsum verdecken das Radar)
+  local h0 = land.getHeight(p)
+  local maxSlope = 0
+  for k = 0, 7 do
+    local q = offset(p, k * math.pi / 4, c.slopeRadius)
+    maxSlope = math.max(maxSlope, math.abs(land.getHeight(q) - h0) / c.slopeRadius)
+  end
+  if math.deg(math.atan(maxSlope)) > c.maxSlopeDeg then st.slope = st.slope + 1 return false end
+  local blocked = 0
+  for k = 0, 7 do
+    local a = k * math.pi / 4
+    for _, d in ipairs(c.horizonDist) do
+      local dh = land.getHeight(offset(p, a, d)) - h0 - c.antennaHeight
+      if dh > 0 and math.deg(math.atan(dh / d)) > c.maxHorizonDeg then blocked = blocked + 1 break end
+    end
+  end
+  if blocked >= c.maxBlockedDirs then st.horizon = st.horizon + 1 return false end
+
+  -- Szenerie: direkt neben Gebäuden, zwischen vielen oder hohen Gebäuden
+  local v3 = toV3(p)
   local found = false
   local ok, err = pcall(function()
     world.searchObjects(Object.Category.SCENERY,
-      { id = world.VolumeType.SPHERE, params = { point = toV3(p), radius = c.sceneryRadius } },
+      { id = world.VolumeType.SPHERE, params = { point = v3, radius = c.sceneryRadius } },
       function() found = true return false end)
   end)
   if not ok then
-    if not D.siting.apiFailed then
-      D.siting.apiFailed = true
-      env.warning("DynSEAD: scenery search not available, siting check limited to NOSAM zones: " .. tostring(err))
+    if not st.apiFailed then
+      st.apiFailed = true
+      env.warning("DynSEAD: scenery search not available, siting check limited to terrain and NOSAM zones: " .. tostring(err))
     end
     return true
   end
-  if found then D.siting.scenery = D.siting.scenery + 1 return false end
+  if found then st.scenery = st.scenery + 1 return false end
+
+  local wide = math.max(c.urbanRadius, c.tallRadius)
+  local count, tall = 0, false
+  pcall(function()
+    world.searchObjects(Object.Category.SCENERY,
+      { id = world.VolumeType.SPHERE, params = { point = v3, radius = wide } },
+      function(obj)
+        local okp, op = pcall(function() return obj:getPoint() end)
+        local d = okp and op and dist(toV2(op), p) or wide
+        if d <= c.urbanRadius then count = count + 1 end
+        if d <= c.tallRadius then
+          local okd, desc = pcall(function() return obj:getDesc() end)
+          if okd and desc and desc.box and desc.box.max and desc.box.min
+             and (desc.box.max.y - desc.box.min.y) >= c.tallHeight then
+            tall = true
+            return false
+          end
+        end
+        return true
+      end)
+  end)
+  if tall or count >= c.urbanMax then st.urban = st.urban + 1 return false end
   return true
 end
 
@@ -1038,8 +1093,9 @@ function D.createSam(ao, key, p, errMax, quiet, forceMode)
     D.setRadar(site, site.mode ~= "ambush")
   end, "Radar"), nil, now + 3)
 
-  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, %d rejected near scenery, %d in NOSAM zones%s",
-    key, D.siting.tested, D.siting.scenery, D.siting.zone, D.siting.apiFailed and " (scenery search unavailable)" or ""))
+  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
+    key, D.siting.tested, D.siting.scenery, D.siting.urban, D.siting.slope, D.siting.horizon, D.siting.zone,
+    D.siting.apiFailed and " (scenery search unavailable)" or ""))
   if not quiet then
     D.say({ "all_players", "new_threat", tSam(key), tBE(site.intelPos), tDist(site.err), "area", tPlace(ao.name) })
     msg(string.format("INTEL [%s]: New threat reported – %s.\nApprox. position (±%s): %s",
@@ -3670,12 +3726,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.18 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.19 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.18 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.19 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
