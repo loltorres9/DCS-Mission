@@ -17,7 +17,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `voice` (siehe Docstring) |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
-| `voice/make_overlord_voice.ps1` | erzeugt beim Nutzer (Windows-Sprachausgabe) die 111 WAV-Bausteine `ov_*.wav` + Index |
+| `voice/make_overlord_voice.py` | erzeugt beim Nutzer per Edge-TTS (neuronale Stimme, `pip install edge-tts`, ffmpeg) die 111 WAV-Bausteine `ov_*.wav` + ZIP; Sandbox hat kein Internet |
+| `voice/make_overlord_voice.ps1` | alte Variante mit Windows-Sprachausgabe (SAPI), nicht mehr bevorzugt |
 
 ## Arbeitsablauf
 1. `src/DynSEAD.lua` ändern → **Version im Kopf erhöhen** (alle Vorkommen von `DynSEAD vX.Y`).
@@ -60,7 +61,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 - Spielbare Typnamen: `F-16C_50`, `FA-18C_hornet`, `A-10C_2`, `AJS37`, `AH-64D_BLK_II`. Viggen nimmt nur B1–B9.
 
 ## Ungetestet / offene Punkte
-1. **Sprachausgabe einbauen**: Nutzer führt `voice/make_overlord_voice.ps1` aus und liefert `overlord_voice.zip`.
+1. **Sprachausgabe einbauen**: Nutzer führt `voice/make_overlord_voice.py` aus und liefert `overlord_voice.zip`.
    Dann `python tools/miz_tool.py voice mission/Dynamic_Script.miz voice/overlord_voice.zip --radio`
    (benötigt ffmpeg; schneidet Stille, optional Funkfilter, schreibt Index + Trigger). Danach Mission **nicht**
    mehr im Editor speichern (Editor entfernt unverknüpfte WAVs) – sonst `voice` erneut ausführen.
