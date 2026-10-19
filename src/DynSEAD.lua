@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.8 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.9 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -3042,65 +3042,74 @@ function D.start()
 end
 
 function D.buildMenu()
+  -- DCS zeigt pro Menüebene nur etwa 10 Einträge: alles in Untermenüs (je höchstens 9 Einträge) gruppieren
   local side = D.cfg.blueSide
+  local function sub(parent, name) return missionCommands.addSubMenuForCoalition(side, name, parent) end
+  local function cmd(parent, name, fn) missionCommands.addCommandForCoalition(side, name, parent, safe(fn, "Menu")) end
+
   local root = missionCommands.addSubMenuForCoalition(side, "Dynamic Mission")
-  missionCommands.addCommandForCoalition(side, "Campaign: Status", root, safe(D.reportCampaign, "Menu"))
-  missionCommands.addCommandForCoalition(side, "Navigation: AO steerpoints", root, safe(D.reportNav, "Menu"))
-  missionCommands.addCommandForCoalition(side, "SEAD: SITREP", root, safe(D.reportSEAD, "Menu"))
+
+  local info = sub(root, "Info")
+  cmd(info, "Campaign: Status", D.reportCampaign)
+  cmd(info, "Navigation: AO steerpoints", D.reportNav)
+  cmd(info, "SEAD: SITREP", D.reportSEAD)
   if D.cfg.voice.enabled then
-    missionCommands.addCommandForCoalition(side, "Overlord: Request threat picture (voice)", root, safe(D.voicePicture, "Menu"))
+    cmd(info, "Overlord: Request threat picture (voice)", D.voicePicture)
   end
-  missionCommands.addCommandForCoalition(side, "Threats: MANPADS areas", root, safe(D.reportManpads, "Menu"))
-  missionCommands.addCommandForCoalition(side, "Support: AWACS & tankers", root, safe(D.reportSupport, "Menu"))
-  missionCommands.addCommandForCoalition(side, "CAS: Request new tasking", root, safe(D.requestCAS, "Menu"))
-  missionCommands.addCommandForCoalition(side, "CAS: Active taskings", root, safe(D.reportCAS, "Menu"))
-  missionCommands.addCommandForCoalition(side, "CAS: Mark targets with smoke", root, safe(D.smokeCAS, "Menu"))
+  cmd(info, "Threats: MANPADS areas", D.reportManpads)
+  cmd(info, "Support: AWACS & tankers", D.reportSupport)
+  cmd(info, "Statistics", D.reportStats)
+
+  local cas = sub(root, "CAS")
+  cmd(cas, "Request new tasking", D.requestCAS)
+  cmd(cas, "Active taskings", D.reportCAS)
+  cmd(cas, "Mark targets with smoke", D.smokeCAS)
+
   if D.cfg.cap.enabled then
-    local capMenu = missionCommands.addSubMenuForCoalition(side, "A2A: Request enemy CAP", root)
-    missionCommands.addCommandForCoalition(side, "Current difficulty", capMenu, safe(function() D.spawnCAP() end, "Menu"))
+    local capMenu = sub(root, "A2A: Request enemy CAP")
+    cmd(capMenu, "Current difficulty", function() D.spawnCAP() end)
     for i, td in ipairs(D.cfg.cap.tiers) do
       local types = {}
       for _, v in ipairs(td.variants) do types[#types + 1] = v.type end
-      missionCommands.addCommandForCoalition(side,
-        string.format("Level %d – %s (%s)", i, td.label, table.concat(types, "/")),
-        capMenu, safe(function() D.spawnCAP(i) end, "Menu"))
+      cmd(capMenu, string.format("Level %d – %s (%s)", i, td.label, table.concat(types, "/")),
+        function() D.spawnCAP(i) end)
     end
   end
+
   if D.cfg.ship.enabled then
-    local shipMenu = missionCommands.addSubMenuForCoalition(side, "Ship Strike", root)
-    missionCommands.addCommandForCoalition(side, "Current difficulty", shipMenu, safe(function() D.requestShip() end, "Menu"))
+    local shipMenu = sub(root, "Ship Strike")
+    cmd(shipMenu, "Current difficulty", function() D.requestShip() end)
     for i, td in ipairs(D.cfg.ship.tiers) do
-      missionCommands.addCommandForCoalition(side, string.format("Level %d – %s", i, td.label),
-        shipMenu, safe(function() D.requestShip(i) end, "Menu"))
+      cmd(shipMenu, string.format("Level %d – %s", i, td.label), function() D.requestShip(i) end)
     end
-    missionCommands.addCommandForCoalition(side, "Active taskings", shipMenu, safe(D.reportShips, "Menu"))
+    cmd(shipMenu, "Active taskings", D.reportShips)
   end
-  local sq = missionCommands.addSubMenuForCoalition(side, "Side Missions", root)
+
+  local sq = sub(root, "Side Missions")
   if D.cfg.convoy.enabled then
-    missionCommands.addCommandForCoalition(side, "Convoy: Request intercept tasking", sq, safe(D.requestConvoy, "Menu"))
-    missionCommands.addCommandForCoalition(side, "Convoy: Status and route", sq, safe(D.reportConvoy, "Menu"))
+    cmd(sq, "Convoy: Request intercept tasking", D.requestConvoy)
+    cmd(sq, "Convoy: Status and route", D.reportConvoy)
   end
   if D.cfg.deepStrike.enabled then
-    missionCommands.addCommandForCoalition(side, "Deep Strike: Request tasking", sq, safe(D.requestDeepStrike, "Menu"))
-    missionCommands.addCommandForCoalition(side, "Deep Strike: Status", sq, safe(D.reportDeepStrike, "Menu"))
+    cmd(sq, "Deep Strike: Request tasking", D.requestDeepStrike)
+    cmd(sq, "Deep Strike: Status", D.reportDeepStrike)
   end
   if D.cfg.tic.enabled then
-    missionCommands.addCommandForCoalition(side, "TIC: Request troops-in-contact tasking", sq, safe(D.requestTic, "Menu"))
-    local jt = missionCommands.addSubMenuForCoalition(side, "JTAC", sq)
-    missionCommands.addCommandForCoalition(side, "Situation report", jt, safe(D.reportTic, "Menu"))
-    missionCommands.addCommandForCoalition(side, "Friendlies: green smoke", jt, safe(function() D.ticMarkFriendly("green") end, "Menu"))
-    missionCommands.addCommandForCoalition(side, "Friendlies: orange smoke", jt, safe(function() D.ticMarkFriendly("orange") end, "Menu"))
-    missionCommands.addCommandForCoalition(side, "Friendlies: white smoke", jt, safe(function() D.ticMarkFriendly("white") end, "Menu"))
-    missionCommands.addCommandForCoalition(side, "Friendlies: IR strobe on/off", jt, safe(D.ticToggleStrobe, "Menu"))
-    missionCommands.addCommandForCoalition(side, "Enemy: mark with red smoke", jt, safe(D.ticMarkEnemy, "Menu"))
-    missionCommands.addCommandForCoalition(side, "Enemy: laser on/off", jt, safe(D.ticLase, "Menu"))
+    cmd(sq, "TIC: Request troops-in-contact tasking", D.requestTic)
+    local jt = sub(sq, "JTAC")
+    cmd(jt, "Situation report", D.reportTic)
+    cmd(jt, "Friendlies: green smoke", function() D.ticMarkFriendly("green") end)
+    cmd(jt, "Friendlies: orange smoke", function() D.ticMarkFriendly("orange") end)
+    cmd(jt, "Friendlies: white smoke", function() D.ticMarkFriendly("white") end)
+    cmd(jt, "Friendlies: IR strobe on/off", D.ticToggleStrobe)
+    cmd(jt, "Enemy: mark with red smoke", D.ticMarkEnemy)
+    cmd(jt, "Enemy: laser on/off", D.ticLase)
   end
-  missionCommands.addCommandForCoalition(side, "Statistics", root, safe(D.reportStats, "Menu"))
+
   if D.cfg.debugMenu then
-    missionCommands.addCommandForCoalition(side, "DEBUG: Show all units on map (on/off)", root, safe(D.debugMapToggle, "Menu"))
-  end
-  if D.cfg.debugMenu and D.cfg.mode == "airbases" then
-    missionCommands.addCommandForCoalition(side, "DEBUG: Clear current AO now", root, safe(D.debugCapture, "Menu"))
+    local dbg = sub(root, "DEBUG")
+    cmd(dbg, "Show all units on map (on/off)", D.debugMapToggle)
+    if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
   end
 end
 
@@ -3202,12 +3211,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.8 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.9 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.8 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.9 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
