@@ -5,7 +5,7 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
   python tools/miz_tool.py info      MISSION.miz
   python tools/miz_tool.py embed     MISSION.miz src/DynSEAD.lua            [-o OUT.miz]
   python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [-o OUT.miz]
-  python tools/miz_tool.py options   MISSION.miz optionsView=optview_all [-o OUT.miz]
+  python tools/miz_tool.py options   MISSION.miz optionsView=optview_all --forced [-o OUT.miz]
   python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio [1-3]] [-o OUT.miz]
 
 Ohne -o wird die Eingabedatei überschrieben (vorher wird eine .bak angelegt).
@@ -260,9 +260,24 @@ def cmd_voice(a):
     miz.save(a.out)
 
 # ----------------------------------------------------------------- options
+def _lua_value(val):
+    if val in ("true", "false"): return val == "true"
+    if re.fullmatch(r"-?\d+", val): return int(val)
+    if re.fullmatch(r"-?\d+\.\d+", val): return float(val)
+    return val
+
 def cmd_options(a):
-    """Schwierigkeitsoptionen der Mission setzen (Abschnitt ["difficulty"] der Datei 'options')."""
+    """Optionen setzen. Ohne --forced: Abschnitt ["difficulty"] der Datei 'options' (nur die lokalen Einstellungen des
+    speichernden Nutzers!). Mit --forced: ["forcedOptions"] in der Datei 'mission' – das setzt die Mission selbst durch."""
     miz = Miz(a.miz)
+    if a.forced:
+        fo = miz.table("mission").setdefault("forcedOptions", {})
+        for kv in a.pairs:
+            key, _, val = kv.partition("=")
+            print("forcedOptions.%s: %r -> %r" % (key, fo.get(key), _lua_value(val)))
+            fo[key] = _lua_value(val)
+        miz.save(a.out)
+        return
     txt = miz.files["options"].decode("utf-8")
     m = re.search(r'\["difficulty"\]\s*=\s*\n\s*\{.*?\}, -- end of \["difficulty"\]', txt, re.S)
     if not m: sys.exit("Abschnitt difficulty nicht gefunden")
@@ -287,7 +302,7 @@ if __name__ == "__main__":
     s = sp.add_parser("templates"); s.add_argument("miz"); s.add_argument("--base", required=True)
     s.add_argument("--types", nargs="*", help="Labels/Typen, z.B. F-16 A-10C_2 (Standard: alle)")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
-    s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
+    s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")
     s.add_argument("--radio", nargs="?", type=int, const=2, default=0, choices=[0, 1, 2, 3], help="Funkfilter: 1 leicht, 2 normal (Standard bei --radio), 3 stark verzerrt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_voice)
     a = p.parse_args(); a.f(a)
