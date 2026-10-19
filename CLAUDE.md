@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.11). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.11 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.12). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.12 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -79,7 +79,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 - Spielbare Typnamen: `F-16C_50`, `FA-18C_hornet`, `A-10C_2`, `AJS37`, `AH-64D_BLK_II`. Viggen nimmt nur B1–B9.
 
 ## Ungetestet / offene Punkte
-1. **Sprachausgabe einbauen**: Nutzer führt `voice/make_overlord_voice.py` aus und liefert `overlord_voice.zip`.
+1. **Sprachausgabe** (vorerst abgeschaltet: `cfg.voice.enabled = false`, Nutzer gefällt die TTS-Stimme nicht; Bausteine bleiben in der Mission,
+   Menüpunkt „Overlord: Request threat picture“ entfällt). Einbau: Nutzer führt `voice/make_overlord_voice.py` aus und liefert `overlord_voice.zip`.
    Dann `python tools/miz_tool.py voice mission/Dynamic_Script.miz voice/overlord_voice.zip --radio`
    (benötigt ffmpeg; schneidet Stille, optional Funkfilter, schreibt Index + Trigger). Danach Mission **nicht**
    mehr im Editor speichern (Editor entfernt unverknüpfte WAVs) – sonst `voice` erneut ausführen.
@@ -92,9 +93,9 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
-8. **Ship Strike (v4.11)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+8. **Ship Strike (v4.12)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
    (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
    das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
-9. **Nebenaufträge (v4.11)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
+9. **Nebenaufträge (v4.12)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
    (Konvoi, Deep-Strike-Statik `.Command Center`/`Warehouse`/`Tank`, TIC-Einheiten), `Spot.createInfraRed`/`createLaser`, Platzhalter-Koordinaten
    in `D.cfg.deepStrike.targets`. Logik wurde nur gegen einen DCS-Mock (lupa) getestet. Keine Sprachbausteine dafür.

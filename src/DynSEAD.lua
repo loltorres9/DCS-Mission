@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.11 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.12 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -158,7 +158,7 @@ D.cfg = {
   -- Sprachausgabe von Overlord aus vorproduzierten WAV-Bausteinen (ohne SRS)
   -- Bausteine + Index (DynSEAD_voice.lua) erzeugt das PowerShell-Skript make_overlord_voice.ps1
   voice = {
-    enabled       = true,
+    enabled       = false,         -- Sprachausgabe vorerst aus (Dateien bleiben in der Mission, true schaltet sie wieder ein)
     output        = "all",         -- "all" = alle blauen Spieler hören es direkt
                                    -- "radio" = nur über Cockpit-Funk auf der AWACS-Frequenz (251 AM)
     gap           = 0.05,          -- Pause zwischen Bausteinen (s)
@@ -3215,12 +3215,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.11 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.12 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.11 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.12 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
