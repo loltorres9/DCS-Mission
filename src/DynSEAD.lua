@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.3 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.4 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -199,6 +199,43 @@ D.cfg = {
     manpadsChance  = 0.3,
   },
 
+  ship = {
+    enabled        = true,
+    maxActive      = 1,
+    autoSpawn      = false,        -- true = Schiffsziele automatisch in Intervallen, sonst nur per F10
+    autoInterval   = {1200, 2400},
+    firstDelay     = 600,
+    difficulty     = 2,            -- Standardstufe bei "Current difficulty" (1..#tiers)
+    distance       = {35000, 80000}, -- Abstand des Ziels zu einem nicht-blauen Flugplatz (m), muss auf See liegen
+    seaMargin      = 3000,         -- um den Startpunkt muss in diesem Radius nur Wasser sein
+    leg            = 25000,        -- Länge der Fahrtstrecke (hin und zurück)
+    speed          = 6,            -- m/s (ca. 12 kn)
+    spacing        = 800,          -- Abstand der Schiffe in der Formation (m)
+    minDistPlayers = 20000,
+    successPercent = 100,          -- Anteil zerstörter Schiffe für "Auftrag erfüllt"
+    intelError     = 1500,         -- Ungenauigkeit der Kartenmarkierung (m)
+    markUpdate     = 60,           -- Markierung alle X s nachführen
+    cleanupAfter   = 600,
+    -- Pro Stufe: Schiffstypen, Skill und alertRange. alertRange > 0: Schiffe halten das Feuer (ROE WEAPON_HOLD),
+    -- bis ein Spieler näher als alertRange (m) kommt oder ein Schiff getroffen wird ("Hinterhalt"). Stand-off-Waffen
+    -- (RB 15F, Harpoon) treffen so ein noch ruhendes Ziel. alertRange 0 = Schiffe sind sofort feuerbereit.
+    -- Typnamen ungetestet (ALBATROS = Grisha, MOLNIYA = Tarantul, NEUSTRASH = Neustrashimy); falsche Namen meldet das Skript.
+    tiers = {
+      [1] = { label = "Merchant ships (unarmed)", skill = "Average", alertRange = 0,
+              ships = { "Dry-cargo ship-1", "ELNYA" },
+              brief = "No air defense. Any anti-ship weapon will do." },
+      [2] = { label = "Missile boat", skill = "Good", alertRange = 15000,
+              ships = { "MOLNIYA" },
+              brief = "Light AAA and short-range SAM. Engages inside ~15 km; stand off with RB 15F/Harpoon or use Mavericks from a low, fast attack." },
+      [3] = { label = "Corvette pair", skill = "High", alertRange = 30000,
+              ships = { "ALBATROS", "ALBATROS" },
+              brief = "SA-N-4 and AAA. Engages inside ~30 km; stand-off weapons recommended." },
+      [4] = { label = "Frigate group (full defense)", skill = "Excellent", alertRange = 0,
+              ships = { "NEUSTRASH", "ALBATROS" },
+              brief = "Fully alert, layered air defense. Stand-off weapons and good timing only." },
+    },
+  },
+
   cap = {
     enabled      = true,
     maxActive    = 1,
@@ -289,6 +326,7 @@ D.capLoadouts = {
 D.aos           = {}
 D.sites         = {}
 D.casTasks      = {}
+D.ships         = {}
 D.caps          = {}
 D.targetPool    = {}
 D.targetsTotal  = 0
@@ -296,10 +334,11 @@ D.capturedCount = 0
 D.counter       = 0
 D.markId        = 7000
 D.started       = false
-D.stats         = { sam = 0, cas = 0, cap = 0 }
+D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0 }
 D.blueBases     = {}
 D.nextSam       = math.huge
 D.nextCas       = math.huge
+D.nextShip      = math.huge
 D.nextCapRoll   = math.huge
 D.arms          = {}
 D.armLoopRunning = false
@@ -1676,6 +1715,204 @@ function D.spawnCAP(tier)
 end
 
 -------------------------------------------------------------------------------
+-- SCHIFFSZIELE (Ship Strike)
+-------------------------------------------------------------------------------
+local function isSea(p)
+  local t = land.getSurfaceType(p)
+  return t == land.SurfaceType.WATER or t == land.SurfaceType.SHALLOW_WATER
+end
+
+local function seaClear(p, r)
+  if not isSea(p) then return false end
+  for k = 0, 7 do
+    local a = k * math.pi / 4
+    if not isSea({ x = p.x + r * math.cos(a), y = p.y + r * math.sin(a) }) then return false end
+  end
+  return true
+end
+
+-- Startpunkt auf See vor einem nicht-blauen Flugplatz, mit komplett freier Fahrstrecke
+function D.findSeaSpot()
+  local cfg = D.cfg.ship
+  local bases = {}
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local desc = ab:getDesc()
+    if desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() ~= D.cfg.blueSide then
+      bases[#bases + 1] = toV2(ab:getPoint())
+    end
+  end
+  for i = #bases, 2, -1 do
+    local j = math.random(i)
+    bases[i], bases[j] = bases[j], bases[i]
+  end
+  local players = playerPositions()
+  for _, b in ipairs(bases) do
+    for _ = 1, 40 do
+      local p = offset(b, math.random() * 2 * math.pi, randRange(cfg.distance))
+      if seaClear(p, cfg.seaMargin) and farFrom(p, players, cfg.minDistPlayers) then
+        for _ = 1, 8 do
+          local hdg = math.random() * 2 * math.pi
+          local ok = true
+          for k = 1, 10 do
+            if not seaClear(offset(p, hdg, cfg.leg * k / 10), 1000) then ok = false break end
+          end
+          if ok then return p, hdg end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local function shipWP(p, speed)
+  return { x = p.x, y = p.y, type = "Turning Point", action = "Turning Point", speed = speed,
+           speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
+end
+
+-- free = true: Feuer frei; false: Feuer halten (Hinterhalt)
+local function shipFire(gname, free)
+  local g = Group.getByName(gname)
+  if not g or not g:isExist() then return end
+  local c = g:getController()
+  if not c then return end
+  local naval = AI and AI.Option and AI.Option.Naval
+  local id = (naval and naval.id and naval.id.ROE) or 0
+  local val = naval and naval.val and naval.val.ROE
+  local open = (val and val.OPEN_FIRE) or 2
+  local hold = (val and val.WEAPON_HOLD) or 4
+  pcall(function() c:setOption(id, free and open or hold) end)
+end
+
+function D.updateShipMark(t)
+  if not D.cfg.mapMarks then return end
+  local p = groupPos(t.group)
+  if not p then return end
+  if t.mark then trigger.action.removeMark(t.mark) end
+  t.mark = newMarkId()
+  t.intelPos = { x = p.x + t.offX, y = p.y + t.offY }
+  trigger.action.markToCoalition(t.mark,
+    string.format("SHIP STRIKE: %s (±%s)", t.name, fmtDist(D.cfg.ship.intelError)),
+    toV3(t.intelPos), D.cfg.blueSide, true)
+end
+
+function D.spawnShip(tier, manual)
+  local cfg = D.cfg.ship
+  if not cfg.enabled then return false end
+  if #D.ships >= cfg.maxActive then
+    if manual then msg("SHIP STRIKE: Maximum number of active taskings reached.") end
+    return false
+  end
+  tier = math.max(1, math.min(#cfg.tiers, tier or cfg.difficulty))
+  local td = cfg.tiers[tier]
+  local p, hdg = D.findSeaSpot()
+  if not p then
+    if manual then msg("SHIP STRIKE: No suitable sea area found – try again later.") end
+    return false
+  end
+
+  local gname = nextId("SHIP")
+  local n = #td.ships
+  local units = {}
+  for i, typ in ipairs(td.ships) do
+    local u = offset(p, hdg + math.pi / 2, (i - (n + 1) / 2) * cfg.spacing)
+    units[i] = { name = gname .. "-" .. i, type = typ, x = u.x, y = u.y, heading = hdg,
+                 skill = td.skill or D.cfg.skill }
+  end
+  local q = offset(p, hdg, cfg.leg)
+  coalition.addGroup(D.cfg.redCountry, Group.Category.SHIP, {
+    name = gname, task = "Nothing", units = units,
+    route = { points = { shipWP(p, cfg.speed), shipWP(q, cfg.speed), shipWP(p, cfg.speed) } },
+  })
+
+  local alive = groupAliveCount(gname)
+  if alive < n then
+    local names = {}
+    for _, typ in ipairs(td.ships) do names[#names + 1] = typ end
+    reportError("Ship", string.format("only %d of %d ships spawned (%s) – check ship type names in D.cfg.ship.tiers[%d]",
+      alive, n, table.concat(names, ", "), tier))
+    if alive == 0 then return false end
+  end
+
+  local ambush = (td.alertRange or 0) > 0
+  local off = jitter({ x = 0, y = 0 }, cfg.intelError)
+  local t = { group = gname, name = td.label, tier = tier, initial = alive, offX = off.x, offY = off.y,
+              alertRange = td.alertRange or 0, alerted = not ambush }
+  D.ships[#D.ships + 1] = t
+  shipFire(gname, not ambush)
+  D.updateShipMark(t)
+  t.nextMark = timer.getTime() + cfg.markUpdate
+
+  local ip = t.intelPos or p
+  msg(string.format("SHIP STRIKE: %s – %d ship%s\nApprox. position: %s\n%s",
+    td.label, alive, alive == 1 and "" or "s", D.fmtPos(ip), td.brief or ""))
+  return true
+end
+
+function D.requestShip(tier) D.spawnShip(tier, true) end
+
+function D.reportShips()
+  if #D.ships == 0 then msg("SHIP STRIKE: No active taskings.") return end
+  local lines = { "SHIP STRIKE TASKINGS:" }
+  for i, t in ipairs(D.ships) do
+    local p = groupPos(t.group)
+    if p then
+      local ip = { x = p.x + t.offX, y = p.y + t.offY }
+      lines[#lines + 1] = string.format("%d) %s – %d/%d ships remaining%s\n   Approx. %s",
+        i, t.name, groupAliveCount(t.group), t.initial, t.alerted and " [ACTIVE]" or "", D.fmtPos(ip))
+    end
+  end
+  msg(table.concat(lines, "\n"))
+end
+
+function D.shipTick(now, players)
+  local cfg = D.cfg.ship
+  for i = #D.ships, 1, -1 do
+    local t = D.ships[i]
+    local alive = groupAliveCount(t.group)
+    local destroyed = 1 - alive / t.initial
+    if destroyed * 100 >= cfg.successPercent then
+      table.remove(D.ships, i)
+      D.stats.ship = D.stats.ship + 1
+      if t.mark then trigger.action.removeMark(t.mark) end
+      msg(string.format("SHIP STRIKE: \"%s\" destroyed! (%d total)", t.name, D.stats.ship))
+      local g = t.group
+      timer.scheduleFunction(safe(function() destroyGroup(g) end, "Cleanup"), nil, now + cfg.cleanupAfter)
+    else
+      if not t.alerted then
+        local reason
+        if alive < t.initial then
+          reason = "hit"
+        else
+          local grp = Group.getByName(t.group)
+          if grp and grp:isExist() then
+            for _, u in ipairs(grp:getUnits()) do
+              if u:isExist() then
+                local up = toV2(u:getPoint())
+                for _, q in ipairs(players) do
+                  if dist(up, q) < t.alertRange then reason = "near" break end
+                end
+              end
+              if reason then break end
+            end
+          end
+        end
+        if reason then
+          t.alerted = true
+          shipFire(t.group, true)
+          msg(string.format("SHIP STRIKE: \"%s\" is now ENGAGING!", t.name))
+        else
+          shipFire(t.group, false)
+        end
+      end
+      if now >= (t.nextMark or 0) then
+        D.updateShipMark(t)
+        t.nextMark = now + cfg.markUpdate
+      end
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
 -- KAMPAGNE (Flugplätze)
 -------------------------------------------------------------------------------
 function D.spawnGarrison(ao)
@@ -1873,8 +2110,8 @@ function D.reportCampaign()
 end
 
 function D.reportStats()
-  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nEnemy CAPs: %d\nAirfields: %d",
-    D.stats.sam, D.stats.cas, D.stats.cap, D.capturedCount))
+  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nEnemy CAPs: %d\nAirfields: %d",
+    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.cap, D.capturedCount))
 end
 
 -------------------------------------------------------------------------------
@@ -1926,6 +2163,9 @@ function D.update()
     end
   end
 
+  -- Schiffsziele
+  D.shipTick(now, players)
+
   -- CAP
   for i = #D.caps, 1, -1 do
     if groupAliveCount(D.caps[i].group) == 0 then
@@ -1945,6 +2185,9 @@ function D.update()
   end
   if D.cfg.cas.autoSpawn and now >= D.nextCas then
     D.nextCas = D.spawnCAS(false) and (now + randRange(D.cfg.cas.interval)) or (now + 60)
+  end
+  if D.cfg.ship.enabled and D.cfg.ship.autoSpawn and now >= D.nextShip then
+    D.nextShip = D.spawnShip(nil, false) and (now + randRange(D.cfg.ship.autoInterval)) or (now + 120)
   end
   if D.cfg.cap.enabled and D.cfg.cap.autoChance > 0 and now >= D.nextCapRoll then
     if #D.caps < D.cfg.cap.maxActive and math.random() < D.cfg.cap.autoChance then D.spawnCAP() end
@@ -1979,6 +2222,7 @@ function D.start()
   local now = timer.getTime()
   D.nextSam = now + 5
   D.nextCas = now + D.cfg.cas.firstDelay
+  D.nextShip = now + D.cfg.ship.firstDelay
   D.nextCapRoll = now + randRange(D.cfg.cap.autoInterval)
 
   timer.scheduleFunction(D.tick, nil, now + 2)
@@ -2014,6 +2258,15 @@ function D.buildMenu()
         string.format("Level %d – %s (%s)", i, td.label, table.concat(types, "/")),
         capMenu, safe(function() D.spawnCAP(i) end, "Menu"))
     end
+  end
+  if D.cfg.ship.enabled then
+    local shipMenu = missionCommands.addSubMenuForCoalition(side, "Ship Strike", root)
+    missionCommands.addCommandForCoalition(side, "Current difficulty", shipMenu, safe(function() D.requestShip() end, "Menu"))
+    for i, td in ipairs(D.cfg.ship.tiers) do
+      missionCommands.addCommandForCoalition(side, string.format("Level %d – %s", i, td.label),
+        shipMenu, safe(function() D.requestShip(i) end, "Menu"))
+    end
+    missionCommands.addCommandForCoalition(side, "Active taskings", shipMenu, safe(D.reportShips, "Menu"))
   end
   missionCommands.addCommandForCoalition(side, "Statistics", root, safe(D.reportStats, "Menu"))
   if D.cfg.debugMenu and D.cfg.mode == "airbases" then
@@ -2119,12 +2372,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.3 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.4 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.3 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.4 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 

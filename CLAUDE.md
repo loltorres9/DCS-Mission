@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.3). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.3 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.4). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.4 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `voice` (siehe Docstring) |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -37,6 +37,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
   `sam` (maxActive=5, Typ-Pool, `engageRange`, `modesByType`, `armEvasion`, `relocate`, `pointDefense`),
   `elint`, `awacs` (Overlord E-3A 251 AM, immortal/invisible), `voice`, `tankers` (Texaco KC-135 Boom 255 AM 51Y,
   Arco KC-135MPRS Drogue 256 AM 52Y), `manpads`, `cas`, `cap` (4 Schwierigkeitsstufen, `D.capLoadouts`).
+  `ship` (Ship Strike: 4 Stufen, F10-Untermenü, Ziel 35–80 km vor einem nicht-blauen Flugplatz auf See; Stufe 2/3 halten per
+  ROE `WEAPON_HOLD` das Feuer bis ein Spieler näher als `alertRange` kommt oder ein Schiff getroffen wird).
 - Spawns per `coalition.addGroup` mit selbst gebauten Gruppentabellen (Land `CJTF_RED` / `CJTF_BLUE`).
 - Hauptschleife `D.update` alle 10 s; ARM-Tracking `D.armTick` jede Sekunde; `D.voiceTick` alle 0,5 s.
 - SAM-Radar = `ALARM_STATE` RED/GREEN. Modi: always / blink / ambush (typabhängige Auslöse-Reichweite).
@@ -75,3 +77,6 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
+8. **Ship Strike (v4.4)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+   (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
+   das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
