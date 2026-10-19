@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.5 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.6 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -282,15 +282,25 @@ D.cfg = {
     autoSpawn      = false,
     autoInterval   = {1800, 3600},
     firstDelay     = 1500,
+    -- Eigene Zone abseits der SAM-Zonen, gedacht für A-10C und AH-64D (kein SAM-Risiko, nur leichte Flak):
+    --  1) Trigger-Zonen, deren Name mit zonePrefix beginnt (im Editor frei platzierbar), sonst
+    --  2) automatisch: baseDistance m von einer blauen Basis, außerhalb aller aktiven AOs (+ aoMargin)
+    --     und mindestens samClearance von jeder bekannten SAM-Stellung entfernt.
+    zonePrefix     = "TIC",
+    baseDistance   = {10000, 45000},
+    aoMargin       = 5000,
+    samClearance   = 50000,
+    samClearanceMin = 35000,       -- zweiter Versuch, falls mit samClearance nichts gefunden wird
+    keepClear      = 45000,        -- solange der Auftrag läuft, werden hier keine neuen SAMs platziert
     friendlies     = { "M-2 Bradley", "M1043 HMMWV Armament", "Soldier M4", "Soldier M4", "Soldier M249", "Soldier M4" },
-    spawnDistance  = {6000, 9000}, -- Entfernung, aus der die Feinde anrücken (m)
+    spawnDistance  = {4000, 7000}, -- Entfernung, aus der die Feinde anrücken (m)
     waves          = 3,
-    waveInterval   = 240,          -- s zwischen den Wellen
+    waveInterval   = 300,          -- s zwischen den Wellen
     enemySpeed     = 8,            -- m/s
-    -- Feindwellen (zufällig gewählt)
+    -- Feindwellen (zufällig gewählt): leichte Fahrzeuge, Infanterie und nur Ural-ZU-23 als Flak
     waveTemplates  = {
       { "BMP-2", "BMP-2", "BTR-80", "Infantry AK", "Infantry AK", "Infantry AK" },
-      { "T-72B", "T-72B", "BMP-2", "Ural-375 ZU-23" },
+      { "T-72B", "BMP-2", "BTR-80", "Ural-375 ZU-23", "Infantry AK" },
       { "BRDM-2", "BMP-2", "BMP-2", "BTR-80", "Infantry AK", "Infantry AK" },
     },
     successPercent = 90,           -- Anteil vernichteter Feinde nach der letzten Welle
@@ -749,6 +759,8 @@ local function randomPointInZone(z, margin)
   return { x = z.x + r * math.cos(a), y = z.y + r * math.sin(a) }
 end
 
+D.safeZones = {}   -- { x, y, r }: im ersten Durchlauf von findSpot (SAM/CAS/CAP) gemieden
+
 function D.findSpot(aos, avoid, sep)
   if #aos == 0 then return nil end
   local players = playerPositions()
@@ -757,7 +769,13 @@ function D.findSpot(aos, avoid, sep)
     for _ = 1, 100 do
       local z = pickZone(aos)
       local p = randomPointInZone(z, 1000)
-      if okGround(p)
+      local safe = true
+      if pass == 1 then
+        for _, sz in ipairs(D.safeZones) do
+          if dist(p, sz) < sz.r then safe = false break end
+        end
+      end
+      if safe and okGround(p)
         and farFrom(p, players, D.cfg.minDistPlayers * f)
         and farFrom(p, D.blueBases, D.cfg.minDistBlueBase * f)
         and farFrom(p, avoid, (sep or 0) * f) then
@@ -2411,6 +2429,55 @@ function D.reportTic()
   msg(table.concat(lines, "\n"))
 end
 
+-- Ort für Troops in Contact: Editor-Zone "TIC*" oder automatisch abseits der AOs und SAMs
+function D.findTicSpot()
+  local cfg = D.cfg.tic
+  local players = playerPositions()
+
+  if D.ticZones == nil then
+    D.ticZones = {}
+    local mz = env.mission and env.mission.triggers and env.mission.triggers.zones or {}
+    for _, z in pairs(mz) do
+      if type(z) == "table" and z.name and z.name:sub(1, #cfg.zonePrefix) == cfg.zonePrefix then
+        local tz = trigger.misc.getZone(z.name)
+        if tz and tz.radius and tz.radius > 0 then
+          D.ticZones[#D.ticZones + 1] = { name = z.name, x = tz.point.x, y = tz.point.z, radius = tz.radius }
+        end
+      end
+    end
+  end
+  if #D.ticZones > 0 then
+    for _ = 1, 60 do
+      local z = D.ticZones[math.random(#D.ticZones)]
+      local p = randomPointInZone(z, 300)
+      if okGround(p) and farFrom(p, players, 3000) then return p, z.name end
+    end
+  end
+
+  if #D.blueBases == 0 then return nil end
+  for pass = 1, 2 do
+    local samClear = (pass == 1) and cfg.samClearance or cfg.samClearanceMin
+    local aoMargin = (pass == 1) and cfg.aoMargin or 0
+    for _ = 1, 150 do
+      local b = D.blueBases[math.random(#D.blueBases)]
+      local p = offset(b, math.random() * 2 * math.pi, randRange(cfg.baseDistance))
+      local clear = okGround(p) and farFrom(p, players, 3000)
+      if clear then
+        for _, ao in ipairs(D.aos) do
+          if dist(p, ao) < ao.radius + aoMargin then clear = false break end
+        end
+      end
+      if clear then
+        for _, st in ipairs(D.sites) do
+          if dist(p, st.pos) < samClear then clear = false break end
+        end
+      end
+      if clear then return p, (b.name and ("near " .. b.name)) or "friendly area" end
+    end
+  end
+  return nil
+end
+
 function D.spawnTicWave(t)
   local cfg = D.cfg.tic
   local tpl = cfg.waveTemplates[math.random(#cfg.waveTemplates)]
@@ -2459,10 +2526,9 @@ function D.spawnTic(manual)
     if manual then msg("TIC: Maximum number of active taskings reached.") end
     return false
   end
-  local aos = aoCandidates(nil)
-  local p, ao = D.findSpot(aos, nil, 0)
+  local p, area = D.findTicSpot()
   if not p then
-    if manual then msg("TIC: No suitable area found – try again later.") end
+    if manual then msg("TIC: No safe area found away from the SAM zones – try again later.") end
     return false
   end
 
@@ -2480,15 +2546,17 @@ function D.spawnTic(manual)
     if alive == 0 then return false end
   end
 
-  local t = { friend = gname, friendInitial = alive, p = p, ao = ao, axis = math.random() * 2 * math.pi,
+  local sz = { x = p.x, y = p.y, r = cfg.keepClear }
+  D.safeZones[#D.safeZones + 1] = sz
+  local t = { friend = gname, friendInitial = alive, p = p, area = area, sz = sz, axis = math.random() * 2 * math.pi,
               waves = 0, enemies = {}, enemyInitial = 0, started = timer.getTime(), nextWave = timer.getTime() + 60 }
   D.tics[#D.tics + 1] = t
   if D.cfg.mapMarks then
     t.mark = newMarkId()
     trigger.action.markToCoalition(t.mark, "TROOPS IN CONTACT (friendlies)", toV3(p), D.cfg.blueSide, true)
   end
-  msg(string.format("TROOPS IN CONTACT [%s]: Friendly ground forces (%d) are holding a position and expect an enemy attack in minutes.\nPosition: %s\nThey will mark with smoke and IR strobe when you are close (or use the F10 menu: Side Missions > JTAC). Destroy the attacking enemy forces in %d waves. Watch for danger close.",
-    ao and ao.name or "AO", alive, D.fmtPos(p), cfg.waves))
+  msg(string.format("TROOPS IN CONTACT [%s]: Friendly ground forces (%d) are holding a position and expect an enemy attack in minutes.\nPosition: %s\nNo SAM threat reported in the area, light AAA and MANPADS possible. Best suited for A-10C and AH-64D.\nThey will mark with smoke and IR strobe when you are close (or use the F10 menu: Side Missions > JTAC). Destroy the attacking enemy forces in %d waves. Watch for danger close.",
+    area or "friendly area", alive, D.fmtPos(p), cfg.waves))
   return true
 end
 
@@ -2530,6 +2598,9 @@ function D.ticTick(now, players)
     if verdict then
       table.remove(D.tics, i)
       if t.mark then trigger.action.removeMark(t.mark) end
+      for k, sz in ipairs(D.safeZones) do
+        if sz == t.sz then table.remove(D.safeZones, k) break end
+      end
       if t.ir then pcall(function() t.ir:destroy() end) end
       if t.laser then pcall(function() t.laser:destroy() end) end
       if verdict == "success" then
@@ -3042,12 +3113,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.5 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.6 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.5 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.6 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
