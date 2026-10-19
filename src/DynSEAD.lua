@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.16 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.17 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -319,8 +319,8 @@ D.cfg = {
 
   fortress = {
     enabled        = true,
-    unlockAfter    = 6,            -- ab so vielen eroberten Flugplätzen erscheint die feindliche Hauptbasis (danach dauerhaft aktiv)
-    candidates     = 5,            -- Hauptbasis: zufällig unter den X am weitesten von den blauen Basen entfernten roten Flugplätzen
+    unlockAfter    = 0,            -- 0 = Hauptbasis wird erst aktiv, wenn alle anderen Flugplätze erobert sind (Finale); N > 0 = schon nach N Eroberungen (dann dauerhaft aktiv)
+    candidates     = 5,            -- Hauptbasis: wird beim Kampagnenstart (unsichtbar) zufällig unter den X am weitesten von den blauen Basen entfernten roten Flugplätzen reserviert
     radius         = 45000,        -- Kreis auf der F10-Karte
     intelError     = 3000,         -- Start-Ungenauigkeit der Stellungen (m): bewusste, bekannte Bedrohung
     -- Schichten von außen nach innen: Typ, Anzahl, Abstand zur Basis (m), Mindestabstand untereinander (m)
@@ -461,6 +461,7 @@ D.deeps         = {}
 D.tics          = {}
 D.bombers       = {}
 D.fortress      = nil
+D.fortressBase  = nil
 D.caps          = {}
 D.targetPool    = {}
 D.targetsTotal  = 0
@@ -2862,13 +2863,10 @@ function D.fortressSitesLeft()
   return n
 end
 
-function D.activateFortress(manual)
+-- Hauptbasis beim Kampagnenstart reservieren: aus dem normalen Ziel-Pool nehmen, aber noch nicht aktivieren
+function D.reserveFortress()
   local cfg = D.cfg.fortress
-  if not cfg.enabled then return false end
-  if D.fortress then
-    if manual then msg("MAIN BASE: The enemy main base is already active.") end
-    return false
-  end
+  if not cfg.enabled or D.fortressBase then return end
   D.refreshBlueBases()
   local list = {}
   for _, name in ipairs(D.targetPool) do
@@ -2877,19 +2875,35 @@ function D.activateFortress(manual)
       local p = toV2(ab:getPoint())
       local d = math.huge
       for _, b in ipairs(D.blueBases) do d = math.min(d, dist(p, b)) end
-      list[#list + 1] = { name = name, p = p, d = d }
+      list[#list + 1] = { name = name, d = d }
     end
   end
   table.sort(list, function(a, b) return a.d > b.d end)
   local n = math.min(cfg.candidates, #list)
-  if n == 0 then
-    if manual then msg("MAIN BASE: No enemy airfield left to serve as main base.") end
-    return false
-  end
+  if n == 0 then return end
   local c = list[math.random(n)]
   for i, name in ipairs(D.targetPool) do
     if name == c.name then table.remove(D.targetPool, i) break end
   end
+  D.fortressBase = c.name
+  env.info("DynSEAD: main base reserved: " .. c.name)
+end
+
+function D.activateFortress(manual)
+  local cfg = D.cfg.fortress
+  if not cfg.enabled then return false end
+  if D.fortress then
+    if manual then msg("MAIN BASE: The enemy main base is already active.") end
+    return false
+  end
+  if not D.fortressBase then D.reserveFortress() end
+  local ab = D.fortressBase and Airbase.getByName(D.fortressBase)
+  if not ab then
+    if manual then msg("MAIN BASE: No enemy airfield left to serve as main base.") end
+    return false
+  end
+  local c = { name = D.fortressBase, p = toV2(ab:getPoint()) }
+  D.fortressBase = nil
 
   local total = 0
   for _, l in ipairs(cfg.layers) do total = total + l.count end
@@ -2955,7 +2969,7 @@ end
 
 function D.checkFortress()
   local cfg = D.cfg.fortress
-  if cfg.enabled and not D.fortress and D.capturedCount >= cfg.unlockAfter then
+  if cfg.enabled and not D.fortress and cfg.unlockAfter > 0 and D.capturedCount >= cfg.unlockAfter then
     D.activateFortress(false)
   end
 end
@@ -2988,6 +3002,7 @@ function D.fortressStatus()
   if not D.fortress or D.fortress.state ~= "active" then
     local cfg = D.cfg.fortress
     if D.fortress then return "MAIN BASE: " .. D.fortress.name .. " neutralized." end
+    if cfg.unlockAfter == 0 then return "MAIN BASE: not yet revealed – the enemy main base becomes active once all other airfields are captured." end
     return string.format("MAIN BASE: not yet revealed (unlocks after %d captured airfields, %d so far).", cfg.unlockAfter, D.capturedCount)
   end
   return string.format("MAIN BASE: %s – %d of %d SAM sites remaining.", D.fortress.name, D.fortressSitesLeft(), D.fortress.total)
@@ -3075,6 +3090,9 @@ function D.activateNext()
   if #D.aos == 0 then
     if D.fortress and D.fortress.state == "active" then
       msg("Only the enemy main base remains – destroy its air defense network!")
+    elseif #D.targetPool == 0 and D.fortressBase and not D.fortress and D.cfg.fortress.unlockAfter == 0 then
+      msg("All outlying airfields are secured. The enemy has fallen back to its main base!")
+      D.activateFortress(false)
     elseif #D.targetPool == 0 then
       msg("CAMPAIGN COMPLETE – all airfields captured! Outstanding work.")
     else
@@ -3594,17 +3612,18 @@ local function init()
   if D.cfg.mode == "airbases" then ok = initAirbases() else ok = initZones() end
   if not ok then return end
   D.refreshBlueBases()
+  if D.cfg.mode == "airbases" then D.reserveFortress() end
   initVoice()
   D.buildMenu()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.16 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.17 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.16 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.17 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 

@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.16). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.16 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.17). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.17 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -43,8 +43,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
   Start/Ziel/Linie auf der Karte, verloren bei Ankunft), `deepStrike` (statisches Ziel an festen Lat/Lon-Koordinaten ≥ 100 km von der
   nächsten blauen Basis, Flak-Schutz, für Präzisionswaffen), `bomber` (Bomber Intercept: Tu-95MS/Tu-160 starten in der Luft vor einem feindlichen Flugplatz, Ziel ist ein blauer Flugplatz 150–350 km entfernt; ohne
   Waffen, den Abwurf stellt das Skript mit Explosionen nach, sobald ein Bomber ≤ `releaseRange` ans Ziel kommt; Erfolg nur, wenn alle vorher fallen; Lagemeldungen
-  alle 90 s plus ungenauer Kartenmarker; `bombPower = 0` schaltet den Schaden ab), `fortress` (Hauptmission feindliche Hauptbasis: erscheint nach `unlockAfter` = 6 eroberten Flugplätzen, bleibt dauerhaft aktiv, läuft neben der normalen Kampagne;
-  Basis zufällig unter den 5 am weitesten von blauen Basen entfernten roten Flugplätzen (aus `targetPool` genommen); Schichten S-200 ×2 außen, S-300PS ×2, SA-11 ×2, SA-15 ×2 innen, alle
+  alle 90 s plus ungenauer Kartenmarker; `bombPower = 0` schaltet den Schaden ab), `fortress` (Hauptmission feindliche Hauptbasis als Finale: wird beim Kampagnenstart unsichtbar reserviert (zufällig unter den 5 am weitesten von blauen Basen entfernten roten
+  Flugplätzen, aus `targetPool` genommen, `D.reserveFortress`) und erst aktiv, wenn alle anderen Flugplätze erobert sind (`unlockAfter = 0`; N > 0 = schon nach N Eroberungen); Schichten S-200 ×2 außen, S-300PS ×2, SA-11 ×2, SA-15 ×2 innen, alle
   Radare dauerhaft an (`mode = always`), kritisch = Zielradar **und** alle Startgeräte; dazu Frühwarnradar, Flak, Garnison, MANPADS; gewonnen, wenn alle SAM-Stellungen zerstört sind, dann wird
   der Platz blau; `D.createSam(ao, key, p, …)` baut eine Stellung; Hauptbasis-Stellungen zählen nicht gegen `sam.maxActive`; F10 DEBUG > „Activate enemy main base now“), `tic` (Troops in Contact für A-10C/AH-64D, bewusst abseits der SAM-Zonen: Editor-Trigger-Zone `TIC*` oder automatisch 10–45 km von einer blauen Basis,
   außerhalb aller aktiven AOs und ≥ 50 km von SAMs; `D.safeZones` hält neue SAMs fern; blaue Gruppe, 3 anrückende leichte rote Wellen, Rauch/IR-Strobe
@@ -99,9 +99,9 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
-8. **Ship Strike (v4.16)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+8. **Ship Strike (v4.17)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
    (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
    das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
-9. **Nebenaufträge (v4.16)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
+9. **Nebenaufträge (v4.17)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
    (Hauptbasis `RPC_5N62V`/`RLS_19J6`/`S-200_Launcher`/`S-300PS …`/`1L13 EWR`/`55G6 EWR`, Bomber `Tu-95MS`/`Tu-160`, `REACTION_ON_THREAT`, Konvoi, Deep-Strike-Statik `.Command Center`/`Warehouse`/`Tank`, TIC-Einheiten), `Spot.createInfraRed`/`createLaser`, Platzhalter-Koordinaten
    in `D.cfg.deepStrike.targets`. Logik wurde nur gegen einen DCS-Mock (lupa) getestet. Keine Sprachbausteine dafür.
