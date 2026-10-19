@@ -274,6 +274,9 @@ def cmd_options(a):
         fo = miz.table("mission").setdefault("forcedOptions", {})
         for kv in a.pairs:
             key, _, val = kv.partition("=")
+            if val == "":                      # KEY= entfernt den Eintrag, die Mission erzwingt ihn dann nicht mehr
+                print("forcedOptions.%s: %r -> (entfernt)" % (key, fo.pop(key, None)))
+                continue
             print("forcedOptions.%s: %r -> %r" % (key, fo.get(key), _lua_value(val)))
             fo[key] = _lua_value(val)
         miz.save(a.out)
@@ -302,7 +305,7 @@ if __name__ == "__main__":
     s = sp.add_parser("templates"); s.add_argument("miz"); s.add_argument("--base", required=True)
     s.add_argument("--types", nargs="*", help="Labels/Typen, z.B. F-16 A-10C_2 (Standard: alle)")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
-    s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
+    s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all; mit --forced entfernt KEY= den Eintrag"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")
     s.add_argument("--radio", nargs="?", type=int, const=2, default=0, choices=[0, 1, 2, 3], help="Funkfilter: 1 leicht, 2 normal (Standard bei --radio), 3 stark verzerrt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_voice)
     a = p.parse_args(); a.f(a)
