@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.6 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.8 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -45,7 +45,9 @@ D.cfg = {
   mapMarks        = true,          -- vermutete SAM-Positionen auf F10-Karte
   drawAO          = true,          -- AO-Kreise auf F10-Karte
   aoWaypointMarks = false,         -- zusätzlicher "WPT"-Marker in der AO-Mitte
-  debugMenu       = true,          -- F10-Befehl zum Testen der Einnahme (später false)
+  debugMenu       = true,          -- F10-Befehle zum Testen (später false)
+  debugShowAll    = true,          -- zum Testen: alle Gruppen beider Seiten als Marker auf der F10-Karte (später false)
+  debugMapInterval = 15,           -- Aktualisierung der Test-Marker in s
   showErrors      = true,          -- Skriptfehler im Spiel anzeigen
   fallbackStart   = 120,
 
@@ -59,6 +61,7 @@ D.cfg = {
     garrisonPercent = 70,
     exclude         = {},          -- z.B. { "Mozdok", "Beslan" }
     maxDistance     = 0,           -- 0 = egal; sonst max. Entfernung zur nächsten blauen Basis
+    aoSeparation    = 85000,       -- Mindestabstand der Mittelpunkte gleichzeitig aktiver AOs (m), ca. 2 x aoRadius + Puffer: Kreise überlappen nicht
     captureDelay    = 60,
   },
 
@@ -2646,13 +2649,18 @@ function D.nextTarget()
   D.refreshBlueBases()
   local best, bestD, bestIdx = nil, math.huge, nil
   local maxD = D.cfg.campaign.maxDistance
+  local sep = D.cfg.campaign.aoSeparation or 0
   for i, name in ipairs(D.targetPool) do
     local ab = Airbase.getByName(name)
     if ab then
       local p = toV2(ab:getPoint())
       local d = math.huge
       for _, b in ipairs(D.blueBases) do d = math.min(d, dist(p, b)) end
-      if (maxD <= 0 or d <= maxD) and d < bestD then best, bestD, bestIdx = name, d, i end
+      local apart = true   -- Kreise bereits aktiver AOs (auch im Abschluss) dürfen nicht überlappen
+      for _, ao in ipairs(D.aos) do
+        if dist(p, ao) < sep then apart = false break end
+      end
+      if apart and (maxD <= 0 or d <= maxD) and d < bestD then best, bestD, bestIdx = name, d, i end
     end
   end
   if bestIdx then table.remove(D.targetPool, bestIdx) end
@@ -2768,6 +2776,83 @@ function D.debugCapture()
   ao.samLeft, ao.samActive, ao.casLeft, ao.casActive = 0, 0, 0, 0
   ao.garrisonDone = true
   msg("DEBUG: " .. ao.name .. " cleared, capture pending.")
+end
+
+-------------------------------------------------------------------------------
+-- TESTHILFE: alle Einheiten beider Seiten auf der F10-Karte
+-------------------------------------------------------------------------------
+D.dbgShow, D.dbgRunning, D.dbgMarks = false, false, {}
+
+function D.debugClearMarks()
+  for gname, id in pairs(D.dbgMarks) do trigger.action.removeMark(id) end
+  D.dbgMarks = {}
+end
+
+function D.debugMapUpdate()
+  local seen = {}
+  for _, side in ipairs({ D.cfg.redSide, D.cfg.blueSide }) do
+    local tag = (side == D.cfg.redSide) and "RED" or "BLUE"
+    for _, g in ipairs(coalition.getGroups(side) or {}) do
+      if g and g:isExist() then
+        local lead, n, types, isPlayer = nil, 0, {}, false
+        for _, u in ipairs(g:getUnits() or {}) do
+          if u:isExist() and u:getLife() >= 1 then
+            if u.getPlayerName and u:getPlayerName() then isPlayer = true end
+            lead = lead or u
+            n = n + 1
+            local tn = u:getTypeName()
+            types[tn] = (types[tn] or 0) + 1
+          end
+        end
+        if lead and not isPlayer then
+          local gname = g:getName()
+          local list = {}
+          for tn, c in pairs(types) do list[#list + 1] = c .. "x " .. tn end
+          table.sort(list)
+          local text = string.format("[%s] %s (%d): %s", tag, gname, n, table.concat(list, ", "))
+          if D.dbgMarks[gname] then trigger.action.removeMark(D.dbgMarks[gname]) end
+          local id = newMarkId()
+          trigger.action.markToCoalition(id, text, lead:getPoint(), D.cfg.blueSide, true)
+          D.dbgMarks[gname] = id
+          seen[gname] = true
+        end
+      end
+    end
+  end
+  for gname, id in pairs(D.dbgMarks) do   -- verschwundene Gruppen entfernen
+    if not seen[gname] then
+      trigger.action.removeMark(id)
+      D.dbgMarks[gname] = nil
+    end
+  end
+end
+
+function D.debugMapLoop(_, t)
+  if not D.dbgShow then
+    D.debugClearMarks()
+    D.dbgRunning = false
+    return nil
+  end
+  local ok, err = pcall(D.debugMapUpdate)
+  if not ok and err ~= D.lastDbgError then
+    D.lastDbgError = err
+    reportError("DebugMap", err)
+  end
+  return t + D.cfg.debugMapInterval
+end
+
+function D.debugMapSet(on)
+  D.dbgShow = on
+  if on and not D.dbgRunning then
+    D.dbgRunning = true
+    timer.scheduleFunction(D.debugMapLoop, nil, timer.getTime() + 1)
+  end
+end
+
+function D.debugMapToggle()
+  D.debugMapSet(not D.dbgShow)
+  msg(D.dbgShow and "DEBUG: All units of both sides are now shown on the F10 map (updated every "
+    .. D.cfg.debugMapInterval .. " s)." or "DEBUG: Unit markers removed from the F10 map.")
 end
 
 -------------------------------------------------------------------------------
@@ -2947,6 +3032,7 @@ function D.start()
   D.nextCapRoll = now + randRange(D.cfg.cap.autoInterval)
 
   timer.scheduleFunction(D.tick, nil, now + 2)
+  if D.cfg.debugShowAll then D.debugMapSet(true) end
   trigger.action.outText("DynSEAD: Mission started. Check the F10 menu under \"Dynamic Mission\".", 20)
   if D.cfg.mode == "airbases" then
     safe(D.activateNext, "Objective selection")()
@@ -3010,6 +3096,9 @@ function D.buildMenu()
     missionCommands.addCommandForCoalition(side, "Enemy: laser on/off", jt, safe(D.ticLase, "Menu"))
   end
   missionCommands.addCommandForCoalition(side, "Statistics", root, safe(D.reportStats, "Menu"))
+  if D.cfg.debugMenu then
+    missionCommands.addCommandForCoalition(side, "DEBUG: Show all units on map (on/off)", root, safe(D.debugMapToggle, "Menu"))
+  end
   if D.cfg.debugMenu and D.cfg.mode == "airbases" then
     missionCommands.addCommandForCoalition(side, "DEBUG: Clear current AO now", root, safe(D.debugCapture, "Menu"))
   end
@@ -3113,12 +3202,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.6 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.8 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.6 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.8 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
