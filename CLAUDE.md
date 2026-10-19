@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.2). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.2 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.3). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.3 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `voice` (siehe Docstring) |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |

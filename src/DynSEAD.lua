@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.2 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.3 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -51,7 +51,7 @@ D.cfg = {
 
   campaign = {
     homeBase        = nil,         -- z.B. "Kutaisi", falls im Editor kein Platz blau ist
-    aoRadius        = 25000,
+    aoRadius        = 40000,
     activeTargets   = 2,           -- gleichzeitig aktive Ziel-Flugplätze
     samPerAO        = {2, 3},
     casPerAO        = {1, 2},
@@ -65,8 +65,8 @@ D.cfg = {
   sam = {
     maxActive         = 5,         -- SAM-Stellungen gleichzeitig (gesamt, alle AOs)
     respawnDelay      = {120, 300},
-    minSeparation     = 8000,
-    intelError        = 3000,      -- Start-Ungenauigkeit (m), wird per ELINT kleiner
+    minSeparation     = 12000,
+    intelError        = 7000,      -- Start-Ungenauigkeit (m), wird per ELINT kleiner
     shoradChance      = 0.5,
     cleanupAfter      = 900,
     armEvasion = {
@@ -126,14 +126,14 @@ D.cfg = {
   elint = {
     enabled      = true,
     awacsRange   = 250000,         -- Reichweite AWACS-ELINT (m)
-    awacsFactor  = 0.96,           -- Fehler * Faktor pro Tick (10 s) bei Ortung durch AWACS
+    awacsFactor  = 0.985,           -- Fehler * Faktor pro Tick (10 s) bei Ortung durch AWACS
     players      = true,           -- Spieler in der Luft orten ebenfalls
     playerRange  = 80000,
-    playerFactor = 0.97,
-    errPerKm     = 3,              -- beste Genauigkeit wächst mit Sensor-Entfernung (m pro km)
-    minError     = 100,            -- absolute Untergrenze (m)
-    locatedAt    = 150,            -- ab hier gilt die Stellung als "LOCATED"
-    announceAt   = {1500, 750},    -- Meldung, wenn diese Genauigkeit unterschritten wird
+    playerFactor = 0.99,
+    errPerKm     = 10,             -- beste Genauigkeit wächst mit Sensor-Entfernung (m pro km)
+    minError     = 400,            -- absolute Untergrenze (m)
+    locatedAt    = 600,            -- ab hier gilt die Stellung als "LOCATED"
+    announceAt   = {3500, 1800},    -- Meldung, wenn diese Genauigkeit unterschritten wird
   },
 
   awacs = {
@@ -2119,12 +2119,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.2 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.3 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.2 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.3 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
