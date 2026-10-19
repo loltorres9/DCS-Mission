@@ -51,7 +51,9 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 - Rote Bodengruppen (SAM, Garnison, CAS, Konvoi, TIC-Feinde …) werden mit `hidden = D.hideOnMap()` gespawnt: `hidden = true` versteckt sie auf der
   F10-Karte **unabhängig** von der Missionsoption „F10 View Options: All“. `cfg.debugVisibleUnits = true` (zum Testen) zeigt sie; vor dem
   Spielbetrieb auf `false`.
-- Missionsoption `optionsView` steht in der Mission auf `optview_all` (alle Einheiten sichtbar, zum Testen); Standard der Mission war `optview_allies`.
+- Missionsoptionen, die die Mission selbst durchsetzt, stehen in `mission.forcedOptions` (Datei `mission`); die Datei `options` enthält nur die lokalen
+  Einstellungen des zuletzt speichernden Nutzers und wirkt nicht. `forcedOptions.optionsView = "optview_all"` (F10 View Options: All, zum Testen)
+  setzt man mit `python tools/miz_tool.py options MISSION.miz optionsView=optview_all --forced`.
 - Spawns per `coalition.addGroup` mit selbst gebauten Gruppentabellen (Land `CJTF_RED` / `CJTF_BLUE`).
 - Hauptschleife `D.update` alle 10 s; ARM-Tracking `D.armTick` jede Sekunde; `D.voiceTick` alle 0,5 s.
 - SAM-Radar = `ALARM_STATE` RED/GREEN. Modi: always / blink / ambush (typabhängige Auslöse-Reichweite).
