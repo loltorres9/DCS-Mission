@@ -5,7 +5,7 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
   python tools/miz_tool.py info      MISSION.miz
   python tools/miz_tool.py embed     MISSION.miz src/DynSEAD.lua            [-o OUT.miz]
   python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [-o OUT.miz]
-  python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio] [-o OUT.miz]
+  python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio [1-3]] [-o OUT.miz]
 
 Ohne -o wird die Eingabedatei überschrieben (vorher wird eine .bak angelegt).
 Benötigt nur Python 3 (voice zusätzlich ffmpeg im PATH).
@@ -211,9 +211,13 @@ def cmd_voice(a):
     if not wavs: sys.exit("keine ov_*.wav gefunden")
     filt = "silenceremove=start_periods=1:start_threshold=-45dB,areverse," \
            "silenceremove=start_periods=1:start_threshold=-45dB,areverse"
-    if a.radio:   # Funk-Charakter: Bandpass + leichte Sättigung + etwas Rauschen
-        filt += ",highpass=f=300,lowpass=f=3200,acompressor=threshold=-18dB:ratio=4,volume=1.6," \
-                "aeval=val(0)+0.004*(random(0)-0.5):c=same,alimiter=limit=0.9"
+    lvl = a.radio                    # 0 = aus, 1 leicht, 2 normal, 3 stark verzerrt
+    if lvl:   # Funk-Charakter: Bandpass + Kompression (+ Sättigung/Bitcrush ab Stufe 3) + Rauschen
+        hp, lp, noise = {1: (250, 3600, 0.002), 2: (300, 3200, 0.004), 3: (400, 2800, 0.012)}[lvl]
+        filt += ",highpass=f=%d,lowpass=f=%d,acompressor=threshold=-18dB:ratio=4,volume=1.6" % (hp, lp)
+        if lvl >= 3:
+            filt += ",acrusher=bits=10:mode=log:aa=1,asoftclip=type=tanh:threshold=0.6"
+        filt += ",aeval=val(0)+%s*(random(0)-0.5):c=same,alimiter=limit=0.9" % noise
     miz = Miz(a.miz)
     for n in [n for n in miz.files if re.fullmatch(r"l10n/DEFAULT/ov_[a-z0-9_]+\.wav", n)]:
         del miz.files[n]
@@ -227,6 +231,14 @@ def cmd_voice(a):
                         "-ar", "22050", "-ac", "1", "-sample_fmt", "s16", out], check=True)
         with wave.open(out) as wf:
             dur = wf.getnframes() / wf.getframerate()
+        if lvl >= 2:   # kurzer Rauschstoß am Ende wie beim Loslassen der Sprechtaste
+            out2 = os.path.join(tmp, "sq_%s.wav" % key)
+            tail = "apad=pad_dur=0.12,aeval=val(0)+if(gt(t\\,%.3f)\\,0.05*(random(0)-0.5)\\,0):c=same,alimiter=limit=0.9" % dur
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", out, "-af", tail, "-ar", "22050", "-ac", "1",
+                            "-sample_fmt", "s16", out2], check=True)
+            out = out2
+            with wave.open(out) as wf:
+                dur = wf.getnframes() / wf.getframerate()
         miz.files["l10n/DEFAULT/ov_%s.wav" % key] = open(out, "rb").read()
         res[miz.next_reskey()] = "ov_%s.wav" % key
         lines.append('  ["%s"] = %.3f,' % (key, dur))
@@ -242,7 +254,7 @@ def cmd_voice(a):
         acts = [rule["actions"][i] for i in sorted(rule["actions"])]
         rule["actions"] = {i + 1: x for i, x in enumerate([{"predicate": "a_do_script_file", "file": vkey}] + acts)}
         m["trig"]["actions"][1] = 'a_do_script_file(getValueResourceByKey("%s")); %s' % (vkey, m["trig"]["actions"][1])
-    print("Sprachbausteine:", len(wavs), "| Funkfilter:", "ja" if a.radio else "nein")
+    print("Sprachbausteine:", len(wavs), "| Funkfilter:", "Stufe %d" % a.radio if a.radio else "nein")
     print("WICHTIG: Mission danach NICHT mehr im Editor speichern (Editor entfernt nicht verknüpfte WAVs).")
     miz.save(a.out)
 
@@ -256,5 +268,5 @@ if __name__ == "__main__":
     s.add_argument("--types", nargs="*", help="Labels/Typen, z.B. F-16 A-10C_2 (Standard: alle)")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")
-    s.add_argument("--radio", action="store_true", help="Funkfilter anwenden"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_voice)
+    s.add_argument("--radio", nargs="?", type=int, const=2, default=0, choices=[0, 1, 2, 3], help="Funkfilter: 1 leicht, 2 normal (Standard bei --radio), 3 stark verzerrt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_voice)
     a = p.parse_args(); a.f(a)
