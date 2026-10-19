@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.9). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.9 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.10). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.10 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -44,7 +44,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
   nächsten blauen Basis, Flak-Schutz, für Präzisionswaffen), `tic` (Troops in Contact für A-10C/AH-64D, bewusst abseits der SAM-Zonen: Editor-Trigger-Zone `TIC*` oder automatisch 10–45 km von einer blauen Basis,
   außerhalb aller aktiven AOs und ≥ 50 km von SAMs; `D.safeZones` hält neue SAMs fern; blaue Gruppe, 3 anrückende leichte rote Wellen, Rauch/IR-Strobe
   automatisch ab 12 km oder per Menü, JTAC-Menü mit Lage, Rotrauch auf Feind, Laser Code 1688).
-- Testhilfe: `cfg.debugShowAll` (standardmäßig an, später auf `false`) bzw. F10 „DEBUG: Show all units on map“ zeichnet alle Gruppen beider Seiten
+- Testhilfe: `cfg.debugShowAll` (standardmäßig aus) bzw. F10 „DEBUG: Show all units on map“ zeichnet alle Gruppen beider Seiten
   (ohne Spielergruppen) als Marker auf die F10-Karte, Aktualisierung alle `debugMapInterval` s.
 - F10-Menü: DCS zeigt pro Ebene nur etwa 10 Einträge, daher sind alle Befehle in Untermenüs gruppiert (Info, CAS, A2A, Ship Strike,
   Side Missions mit JTAC, DEBUG), höchstens 7 Einträge pro Ebene. Neue Befehle in ein passendes Untermenü, nicht an die Wurzel.
@@ -87,9 +87,9 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
-8. **Ship Strike (v4.9)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+8. **Ship Strike (v4.10)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
    (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
    das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
-9. **Nebenaufträge (v4.9)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
+9. **Nebenaufträge (v4.10)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
    (Konvoi, Deep-Strike-Statik `.Command Center`/`Warehouse`/`Tank`, TIC-Einheiten), `Spot.createInfraRed`/`createLaser`, Platzhalter-Koordinaten
    in `D.cfg.deepStrike.targets`. Logik wurde nur gegen einen DCS-Mock (lupa) getestet. Keine Sprachbausteine dafür.

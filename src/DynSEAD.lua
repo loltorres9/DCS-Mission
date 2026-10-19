@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.9 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.10 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -46,7 +46,7 @@ D.cfg = {
   drawAO          = true,          -- AO-Kreise auf F10-Karte
   aoWaypointMarks = false,         -- zusätzlicher "WPT"-Marker in der AO-Mitte
   debugMenu       = true,          -- F10-Befehle zum Testen (später false)
-  debugShowAll    = true,          -- zum Testen: alle Gruppen beider Seiten als Marker auf der F10-Karte (später false)
+  debugShowAll    = false,         -- true: alle Gruppen beider Seiten als Textmarker auf der F10-Karte (auch per F10 > DEBUG schaltbar)
   debugMapInterval = 15,           -- Aktualisierung der Test-Marker in s
   showErrors      = true,          -- Skriptfehler im Spiel anzeigen
   fallbackStart   = 120,
@@ -3211,12 +3211,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.9 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.10 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.9 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.10 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
