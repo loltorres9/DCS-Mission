@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.13 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.14 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -265,7 +265,7 @@ D.cfg = {
     autoInterval   = {2400, 4800},
     firstDelay     = 1200,
     minDistance    = 100000,       -- Mindestabstand zur nächsten blauen Basis (m) = langer Anflug
-    defense        = { "ZSU-23-4 Shilka", "ZU-23 Emplacement", "Strela-10M3", "Infantry AK" },
+    defense        = { "ZSU-23-4 Shilka", "ZU-23 Emplacement", "Strela-10M3" },
     defenseRadius  = {150, 400},
     cleanupAfter   = 900,
     -- Statisches Ziel, das das Skript an den Koordinaten erzeugt (Platzhalter-Koordinaten, nach Belieben ändern).
@@ -296,16 +296,16 @@ D.cfg = {
     samClearance   = 50000,
     samClearanceMin = 35000,       -- zweiter Versuch, falls mit samClearance nichts gefunden wird
     keepClear      = 45000,        -- solange der Auftrag läuft, werden hier keine neuen SAMs platziert
-    friendlies     = { "M-2 Bradley", "M1043 HMMWV Armament", "Soldier M4", "Soldier M4", "Soldier M249", "Soldier M4" },
+    friendlies     = { "M-2 Bradley", "M-2 Bradley", "M1043 HMMWV Armament", "M1043 HMMWV Armament", "M1045 HMMWV TOW", "M-113" },  -- nur Fahrzeuge (Einzelpersonen sind schwer zu finden)
     spawnDistance  = {4000, 7000}, -- Entfernung, aus der die Feinde anrücken (m)
     waves          = 3,
     waveInterval   = 300,          -- s zwischen den Wellen
     enemySpeed     = 8,            -- m/s
     -- Feindwellen (zufällig gewählt): leichte Fahrzeuge, Infanterie und nur Ural-ZU-23 als Flak
     waveTemplates  = {
-      { "BMP-2", "BMP-2", "BTR-80", "Infantry AK", "Infantry AK", "Infantry AK" },
-      { "T-72B", "BMP-2", "BTR-80", "Ural-375 ZU-23", "Infantry AK" },
-      { "BRDM-2", "BMP-2", "BMP-2", "BTR-80", "Infantry AK", "Infantry AK" },
+      { "BMP-2", "BMP-2", "BTR-80", "Ural-375 ZU-23", "UAZ-469" },
+      { "T-72B", "BMP-2", "BTR-80", "Ural-375 ZU-23" },
+      { "BRDM-2", "BMP-2", "BMP-2", "BTR-80", "UAZ-469" },
     },
     successPercent = 90,           -- Anteil vernichteter Feinde nach der letzten Welle
     lossPercent    = 75,           -- ab diesem Verlust der Verbündeten gilt der Auftrag als verloren
@@ -360,7 +360,7 @@ D.samTypes = {
 D.shoradTypes = { "ZSU-23-4 Shilka", "Strela-10M3", "ZU-23 Emplacement" }
 
 D.casTemplates = {
-  { name = "Mech. infantry platoon", units = {"BMP-2","BMP-2","BMP-2","BTR-80","Ural-375","Infantry AK","Infantry AK","Infantry AK"} },
+  { name = "Mech. platoon",           units = {"BMP-2","BMP-2","BMP-2","BTR-80","Ural-375","BTR-80"} },
   { name = "Tank platoon",           units = {"T-72B","T-72B","T-72B","BMP-2","ZSU-23-4 Shilka"} },
   { name = "Artillery battery",      units = {"SAU Gvozdika","SAU Gvozdika","SAU Gvozdika","SAU Gvozdika","Ural-375","BRDM-2"} },
   { name = "Supply convoy",          units = {"Ural-375","Ural-375","Ural-4320T","Ural-375","BTR-80","Ural-375 ZU-23"}, convoy = true },
@@ -368,7 +368,7 @@ D.casTemplates = {
 }
 
 D.garrisonUnits = { "ZSU-23-4 Shilka", "ZU-23 Emplacement", "ZU-23 Emplacement", "Strela-10M3",
-  "BMP-2", "BMP-2", "T-72B", "Ural-375", "Infantry AK", "Infantry AK", "Infantry AK" }
+  "BMP-2", "BMP-2", "T-72B", "Ural-375", "BTR-80", "UAZ-469" }
 
 local R73   = "{FBC29BFE-3D24-4C64-B81D-941239D12249}"
 local R77   = "{B4C01D60-A8A3-4237-BD72-CA7655BC0FE9}"
@@ -1426,7 +1426,7 @@ function D.spawnManpadsZones(ao)
           local hdg = math.random() * 2 * math.pi
           units[#units + 1] = { name = gname .. "-" .. (#units + 1), type = cfg.type, x = pos.x, y = pos.y,
             heading = hdg, skill = D.cfg.skill, playerCanDrive = false }
-          units[#units + 1] = { name = gname .. "-" .. (#units + 1), type = "Infantry AK", x = pos.x + 6, y = pos.y + 4,
+          units[#units + 1] = { name = gname .. "-" .. (#units + 1), type = "UAZ-469", x = pos.x + 6, y = pos.y + 4,
             heading = hdg, skill = D.cfg.skill, playerCanDrive = false }
         end
       end
@@ -1645,7 +1645,7 @@ function D.spawnCAS(manual)
   local list = {}
   for _, t in ipairs(tpl.units) do list[#list + 1] = t end
   local hasManpads = math.random() < D.cfg.cas.manpadsChance
-  if hasManpads then list[#list + 1] = "SA-18 Igla manpad" end
+  if hasManpads then list[#list + 1] = "SA-18 Igla manpad" list[#list + 1] = "__JEEP" end   -- Jeep parkt neben dem MANPADS-Trupp
 
   local hdg = math.random() * 2 * math.pi
   local route, isConvoy = nil, false
@@ -1670,7 +1670,10 @@ function D.spawnCAS(manual)
   local units = {}
   for i, t in ipairs(list) do
     local u
-    if isConvoy then
+    if t == "__JEEP" and units[#units] then      -- Jeep direkt neben dem vorherigen Fahrzeug/Trupp
+      u = { x = units[#units].x + 6, y = units[#units].y + 4 }
+      t = "UAZ-469"
+    elseif isConvoy then
       u = offset(p, hdg, -30 * (i - 1))
     else
       u = offset(p, math.random() * 2 * math.pi, 40 + math.random() * 160)
@@ -3215,12 +3218,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.13 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.14 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.13 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.14 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
