@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.4 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.5 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -236,6 +236,71 @@ D.cfg = {
     },
   },
 
+  convoy = {
+    enabled        = true,
+    maxActive      = 1,
+    autoSpawn      = false,
+    autoInterval   = {1500, 3000},
+    firstDelay     = 900,
+    distance       = {30000, 70000}, -- Luftlinie Start–Ziel (m), Start und Ziel liegen an roten Flugplätzen
+    speed          = 12,           -- m/s (ca. 43 km/h)
+    size           = {5, 8},
+    maxAAA         = 2,            -- höchstens so viele Flak-Fahrzeuge
+    types          = { "Ural-375", "Ural-4320T", "GAZ-66", "UAZ-469" },  -- leichte Fahrzeuge
+    aaaTypes       = { "Ural-375 ZU-23", "ZSU-23-4 Shilka" },
+    successPercent = 70,
+    arriveRadius   = 800,          -- so nah am Ziel gilt der Konvoi als angekommen (Auftrag verloren)
+    minDistPlayers = 15000,
+    cleanupAfter   = 600,
+  },
+
+  deepStrike = {
+    enabled        = true,
+    maxActive      = 1,
+    autoSpawn      = false,
+    autoInterval   = {2400, 4800},
+    firstDelay     = 1200,
+    minDistance    = 100000,       -- Mindestabstand zur nächsten blauen Basis (m) = langer Anflug
+    defense        = { "ZSU-23-4 Shilka", "ZU-23 Emplacement", "Strela-10M3", "Infantry AK" },
+    defenseRadius  = {150, 400},
+    cleanupAfter   = 900,
+    -- Statisches Ziel, das das Skript an den Koordinaten erzeugt (Platzhalter-Koordinaten, nach Belieben ändern).
+    -- Typ/Kategorie ungetestet; schlägt ein Typ fehl, werden die Ersatztypen unten probiert.
+    fallback       = { { type = "Warehouse", category = "Warehouses" }, { type = "Tank", category = "Warehouses" } },
+    targets = {
+      { name = "Command post north of Mozdok",   lat = 43.95, lon = 44.55, type = ".Command Center", category = "Fortifications" },
+      { name = "Ammunition depot near Nalchik",  lat = 43.55, lon = 43.75, type = "Warehouse",       category = "Warehouses" },
+      { name = "Fuel depot near Min. Vody",      lat = 44.30, lon = 43.15, type = "Tank",            category = "Warehouses" },
+      { name = "Command post near Maykop",       lat = 44.75, lon = 40.15, type = ".Command Center", category = "Fortifications" },
+      { name = "Supply depot near Krasnodar",    lat = 45.10, lon = 39.00, type = "Warehouse",       category = "Warehouses" },
+    },
+  },
+
+  tic = {
+    enabled        = true,
+    maxActive      = 1,
+    autoSpawn      = false,
+    autoInterval   = {1800, 3600},
+    firstDelay     = 1500,
+    friendlies     = { "M-2 Bradley", "M1043 HMMWV Armament", "Soldier M4", "Soldier M4", "Soldier M249", "Soldier M4" },
+    spawnDistance  = {6000, 9000}, -- Entfernung, aus der die Feinde anrücken (m)
+    waves          = 3,
+    waveInterval   = 240,          -- s zwischen den Wellen
+    enemySpeed     = 8,            -- m/s
+    -- Feindwellen (zufällig gewählt)
+    waveTemplates  = {
+      { "BMP-2", "BMP-2", "BTR-80", "Infantry AK", "Infantry AK", "Infantry AK" },
+      { "T-72B", "T-72B", "BMP-2", "Ural-375 ZU-23" },
+      { "BRDM-2", "BMP-2", "BMP-2", "BTR-80", "Infantry AK", "Infantry AK" },
+    },
+    successPercent = 90,           -- Anteil vernichteter Feinde nach der letzten Welle
+    lossPercent    = 75,           -- ab diesem Verlust der Verbündeten gilt der Auftrag als verloren
+    maxTime        = 2700,         -- s, danach läuft der Auftrag aus
+    autoMarkRange  = 12000,        -- Verbündete markieren sich automatisch, sobald ein Spieler so nah kommt (m)
+    laserCode      = 1688,
+    cleanupAfter   = 600,
+  },
+
   cap = {
     enabled      = true,
     maxActive    = 1,
@@ -327,6 +392,9 @@ D.aos           = {}
 D.sites         = {}
 D.casTasks      = {}
 D.ships         = {}
+D.convoys       = {}
+D.deeps         = {}
+D.tics          = {}
 D.caps          = {}
 D.targetPool    = {}
 D.targetsTotal  = 0
@@ -334,11 +402,14 @@ D.capturedCount = 0
 D.counter       = 0
 D.markId        = 7000
 D.started       = false
-D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0 }
+D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0 }
 D.blueBases     = {}
 D.nextSam       = math.huge
 D.nextCas       = math.huge
 D.nextShip      = math.huge
+D.nextConvoy    = math.huge
+D.nextDeep      = math.huge
+D.nextTic       = math.huge
 D.nextCapRoll   = math.huge
 D.arms          = {}
 D.armLoopRunning = false
@@ -1913,6 +1984,570 @@ function D.shipTick(now, players)
 end
 
 -------------------------------------------------------------------------------
+-- NEBENAUFTRÄGE: Konvoi, Deep Strike, Troops in Contact (mit JTAC)
+-------------------------------------------------------------------------------
+local function redAirbases()
+  local out = {}
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local desc = ab:getDesc()
+    if desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() ~= D.cfg.blueSide then
+      local p = toV2(ab:getPoint())
+      p.name = ab:getName()
+      out[#out + 1] = p
+    end
+  end
+  return out
+end
+
+local function roadPoint(p, maxDist)
+  local rx, ry = land.getClosestPointOnRoads("roads", p.x, p.y)
+  if rx then
+    local q = { x = rx, y = ry }
+    if dist(q, p) <= maxDist then return q end
+  end
+  return nil
+end
+
+local function bearingDeg(from, to)
+  return math.floor(math.deg(math.atan2(to.y - from.y, to.x - from.x)) + 360.5) % 360
+end
+
+local function removeMarks(list)
+  for _, id in ipairs(list or {}) do trigger.action.removeMark(id) end
+end
+
+local function scheduleCleanup(gnames, delay)
+  timer.scheduleFunction(safe(function()
+    for _, g in ipairs(gnames) do destroyGroup(g) end
+  end, "Cleanup"), nil, timer.getTime() + delay)
+end
+
+local function aliveUnits(gname)
+  local out = {}
+  local g = Group.getByName(gname)
+  if g and g:isExist() then
+    for _, u in ipairs(g:getUnits()) do
+      if u:isExist() and u:getLife() >= 1 then out[#out + 1] = u end
+    end
+  end
+  return out
+end
+
+-- ----------------------------------------------------------------- Konvoi abfangen
+function D.spawnConvoy(manual)
+  local cfg = D.cfg.convoy
+  if not cfg.enabled then return false end
+  if #D.convoys >= cfg.maxActive then
+    if manual then msg("CONVOY: Maximum number of active taskings reached.") end
+    return false
+  end
+  local bases = redAirbases()
+  local players = playerPositions()
+  local A, B, sp, ep
+  for _ = 1, 80 do
+    if #bases < 2 then break end
+    local a, b = bases[math.random(#bases)], bases[math.random(#bases)]
+    local d = dist(a, b)
+    if a ~= b and d >= cfg.distance[1] and d <= cfg.distance[2] then
+      local s1, e1 = roadPoint(a, 8000), roadPoint(b, 8000)
+      if s1 and e1 and dist(s1, e1) > 15000 and farFrom(s1, players, cfg.minDistPlayers) then
+        A, B, sp, ep = a, b, s1, e1
+        break
+      end
+    end
+  end
+  if not sp then
+    if manual then msg("CONVOY: No suitable route found – try again later.") end
+    return false
+  end
+
+  local n = math.random(cfg.size[1], cfg.size[2])
+  local nAAA = math.min(math.random(0, cfg.maxAAA), n - 1)
+  local isAAA = {}
+  while nAAA > 0 do
+    local k = math.random(2, n)
+    if not isAAA[k] then isAAA[k] = true nAAA = nAAA - 1 end
+  end
+  local hdg = math.atan2(ep.y - sp.y, ep.x - sp.x)
+  local gname = nextId("CONVOY")
+  local units, nAA = {}, 0
+  for i = 1, n do
+    local typ
+    if isAAA[i] then typ = cfg.aaaTypes[math.random(#cfg.aaaTypes)] nAA = nAA + 1
+    else typ = cfg.types[math.random(#cfg.types)] end
+    local u = offset(sp, hdg, -30 * (i - 1))
+    units[i] = { name = gname .. "-" .. i, type = typ, x = u.x, y = u.y, heading = hdg,
+                 skill = D.cfg.skill, playerCanDrive = false }
+  end
+  local function wp(p)
+    return { x = p.x, y = p.y, type = "Turning Point", action = "On Road", speed = cfg.speed,
+             speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
+  end
+  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
+    { name = gname, task = "Ground Nothing", hidden = true, units = units, route = { points = { wp(sp), wp(ep) } } })
+
+  local alive = groupAliveCount(gname)
+  if alive < n then
+    reportError("Convoy", string.format("only %d of %d vehicles spawned – check vehicle type names in D.cfg.convoy", alive, n))
+    if alive == 0 then return false end
+  end
+
+  local t = { group = gname, initial = alive, start = sp, dest = ep, aName = A.name, bName = B.name,
+              spawned = timer.getTime(), marks = {} }
+  if D.cfg.mapMarks then
+    local side = D.cfg.blueSide
+    local id1, id2, id3 = newMarkId(), newMarkId(), newMarkId()
+    trigger.action.markToCoalition(id1, "CONVOY START (" .. A.name .. ")", toV3(sp), side, true)
+    trigger.action.markToCoalition(id2, "CONVOY DESTINATION (" .. B.name .. ")", toV3(ep), side, true)
+    trigger.action.lineToAll(side, id3, toV3(sp), toV3(ep), {1, 0.6, 0, 0.9}, 2, true)
+    t.marks = { id1, id2, id3 }
+  end
+  D.convoys[#D.convoys + 1] = t
+
+  local eta = math.floor(dist(sp, ep) * 1.3 / cfg.speed / 60 + 0.5)
+  msg(string.format("CONVOY INTERCEPT: Supply convoy (%d light vehicles, up to %d AAA) departing %s for %s.\nStart: %s\nDestination: %s\nRoute follows the roads between the two points (see F10 map line). Speed ~%d km/h, ETA ~%d min.\nFind them with your AG radar / targeting pod and stop them before they arrive.",
+    alive, cfg.maxAAA, A.name, B.name, D.fmtPos(sp), D.fmtPos(ep), math.floor(cfg.speed * 3.6 + 0.5), eta))
+  return true
+end
+
+function D.requestConvoy() D.spawnConvoy(true) end
+
+function D.reportConvoy()
+  if #D.convoys == 0 then msg("CONVOY: No active taskings.") return end
+  local lines = { "CONVOY TASKINGS:" }
+  for i, t in ipairs(D.convoys) do
+    lines[#lines + 1] = string.format("%d) %s -> %s – %d/%d vehicles remaining\n   Start: %s\n   Destination: %s",
+      i, t.aName, t.bName, groupAliveCount(t.group), t.initial, D.fmtPos(t.start), D.fmtPos(t.dest))
+  end
+  msg(table.concat(lines, "\n"))
+end
+
+function D.convoyTick(now)
+  local cfg = D.cfg.convoy
+  for i = #D.convoys, 1, -1 do
+    local t = D.convoys[i]
+    local alive = groupAliveCount(t.group)
+    local pos = groupPos(t.group)
+    local verdict
+    if (1 - alive / t.initial) * 100 >= cfg.successPercent then
+      verdict = "success"
+    elseif alive == 0 or not pos then
+      verdict = "success"
+    elseif dist(pos, t.dest) <= cfg.arriveRadius then
+      verdict = "escaped"
+    elseif not t.moved then
+      if now - t.spawned >= 180 then
+        if dist(pos, t.start) < 200 then verdict = "stuck" else t.moved = true end
+      end
+    end
+    if verdict then
+      table.remove(D.convoys, i)
+      removeMarks(t.marks)
+      if verdict == "success" then
+        D.stats.convoy = D.stats.convoy + 1
+        msg(string.format("CONVOY: Convoy stopped! (%d total)", D.stats.convoy))
+      elseif verdict == "escaped" then
+        msg("CONVOY: The convoy reached its destination. Tasking failed.")
+      else
+        msg("CONVOY: Tasking cancelled – convoy could not leave its start position.")
+      end
+      scheduleCleanup({ t.group }, verdict == "success" and cfg.cleanupAfter or 5)
+    end
+  end
+end
+
+-- ----------------------------------------------------------------- Deep Strike
+function D.spawnDeepStrike(manual)
+  local cfg = D.cfg.deepStrike
+  if not cfg.enabled then return false end
+  if #D.deeps >= cfg.maxActive then
+    if manual then msg("DEEP STRIKE: Maximum number of active taskings reached.") end
+    return false
+  end
+  local pool, any = {}, false
+  for _, tg in ipairs(cfg.targets) do
+    local v = coord.LLtoLO(tg.lat, tg.lon, 0)
+    local p = { x = v.x, y = v.z }
+    local nb = nearestBlueBase(p)
+    local d = nb and dist(p, nb) or math.huge
+    if d >= cfg.minDistance then
+      any = true
+      if not tg.used then pool[#pool + 1] = { tg = tg, p = p, d = d } end
+    end
+  end
+  if #pool == 0 and any then
+    for _, tg in ipairs(cfg.targets) do tg.used = nil end   -- alle durch: von vorn beginnen
+    return D.spawnDeepStrike(manual)
+  end
+  if #pool == 0 then
+    if manual then msg("DEEP STRIKE: No target far enough from friendly bases.") end
+    return false
+  end
+  local c = pool[math.random(#pool)]
+  local tg, p = c.tg, c.p
+  if land.getSurfaceType(p) ~= land.SurfaceType.LAND then
+    local q
+    for _ = 1, 40 do
+      local r = jitter(p, 800)
+      if land.getSurfaceType(r) == land.SurfaceType.LAND then q = r break end
+    end
+    if not q then
+      reportError("DeepStrike", "no land near target coordinates of " .. tg.name)
+      return false
+    end
+    p = q
+  end
+
+  local objName = nextId("DEEP")
+  local kinds = { { type = tg.type, category = tg.category } }
+  for _, k in ipairs(cfg.fallback) do kinds[#kinds + 1] = k end
+  local placed
+  for _, k in ipairs(kinds) do
+    pcall(coalition.addStaticObject, D.cfg.redCountry, { name = objName, type = k.type, category = k.category,
+      x = p.x, y = p.y, heading = math.random() * 2 * math.pi, canCrash = false })
+    if StaticObject.getByName(objName) then placed = k.type break end
+  end
+  if not placed then
+    reportError("DeepStrike", "could not create static target at " .. tg.name .. " – check type names in D.cfg.deepStrike")
+    return false
+  end
+
+  local gname = nextId("DEEPDEF")
+  local units = {}
+  for i, typ in ipairs(cfg.defense) do
+    local pos
+    for _ = 1, 30 do
+      local q = offset(p, math.random() * 2 * math.pi, randRange(cfg.defenseRadius))
+      if land.getSurfaceType(q) == land.SurfaceType.LAND then pos = q break end
+    end
+    pos = pos or offset(p, math.random() * 2 * math.pi, cfg.defenseRadius[2])
+    units[#units + 1] = { name = gname .. "-" .. i, type = typ, x = pos.x, y = pos.y,
+      heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false }
+  end
+  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
+    { name = gname, task = "Ground Nothing", hidden = true, units = units })
+
+  tg.used = true
+  local t = { name = tg.name, obj = objName, def = gname, p = p, mark = nil }
+  if D.cfg.mapMarks then
+    t.mark = newMarkId()
+    trigger.action.markToCoalition(t.mark, "DEEP STRIKE: " .. tg.name, toV3(p), D.cfg.blueSide, true)
+  end
+  D.deeps[#D.deeps + 1] = t
+
+  local far = (c.d < math.huge) and string.format("%d km", math.floor(c.d / 1000 + 0.5)) or "n/a"
+  msg(string.format("DEEP STRIKE: %s\nTarget position (exact): %s\nDistance to nearest friendly base: %s\nA single structure, defended by AAA and short-range SAM around the target. Precision-guided weapons (JDAM, laser-guided) recommended – plan a long ingress.",
+    tg.name, D.fmtPos(p), far))
+  return true
+end
+
+function D.requestDeepStrike() D.spawnDeepStrike(true) end
+
+function D.reportDeepStrike()
+  if #D.deeps == 0 then msg("DEEP STRIKE: No active taskings.") return end
+  local lines = { "DEEP STRIKE TASKINGS:" }
+  for i, t in ipairs(D.deeps) do
+    lines[#lines + 1] = string.format("%d) %s\n   %s", i, t.name, D.fmtPos(t.p))
+  end
+  msg(table.concat(lines, "\n"))
+end
+
+function D.deepTick(now)
+  local cfg = D.cfg.deepStrike
+  for i = #D.deeps, 1, -1 do
+    local t = D.deeps[i]
+    local o = StaticObject.getByName(t.obj)
+    local dead = (o == nil) or (not o:isExist())
+    if not dead then
+      local ok, life = pcall(function() return o:getLife() end)
+      if ok and life and life < 1 then dead = true end
+    end
+    if dead then
+      table.remove(D.deeps, i)
+      D.stats.deep = D.stats.deep + 1
+      if t.mark then trigger.action.removeMark(t.mark) end
+      msg(string.format("DEEP STRIKE: \"%s\" destroyed! (%d total)", t.name, D.stats.deep))
+      scheduleCleanup({ t.def }, cfg.cleanupAfter)
+    end
+  end
+end
+
+-- ----------------------------------------------------------------- Troops in Contact (TIC) + JTAC
+local smokeColors = { green = "Green", orange = "Orange", white = "White", red = "Red", blue = "Blue" }
+
+local function ticUnitPos(t)
+  local u = aliveUnits(t.friend)[1]
+  return u, u and toV2(u:getPoint()) or t.p
+end
+
+local function ticEnemies(t)
+  local out = {}
+  for _, gname in ipairs(t.enemies) do
+    for _, u in ipairs(aliveUnits(gname)) do out[#out + 1] = u end
+  end
+  return out
+end
+
+local function nearestEnemy(t)
+  local _, fp = ticUnitPos(t)
+  local best, bd = nil, math.huge
+  for _, u in ipairs(ticEnemies(t)) do
+    local d = dist(toV2(u:getPoint()), fp)
+    if d < bd then best, bd = u, d end
+  end
+  return best, bd
+end
+
+function D.ticSmoke(t, color, auto)
+  local _, fp = ticUnitPos(t)
+  local p = offset(fp, math.random() * 2 * math.pi, 15)
+  trigger.action.smoke(toV3(p), trigger.smokeColor[smokeColors[color]])
+  if not auto then msg(string.format("JTAC: Friendlies popping %s smoke.", color)) end
+end
+
+function D.ticStrobe(t, on)
+  if t.ir then pcall(function() t.ir:destroy() end) t.ir = nil end
+  if not on then return end
+  local u = aliveUnits(t.friend)[1]
+  if not u then return end
+  local pt = u:getPoint()
+  local ok, spot = pcall(Spot.createInfraRed, u, { x = 0, y = 2, z = 0 }, { x = pt.x + 30, y = pt.y + 2, z = pt.z })
+  if ok and spot then t.ir = spot t.irUnit = u:getName()
+  else reportError("TIC", "could not create IR pointer: " .. tostring(spot)) end
+end
+
+function D.ticMarkFriendly(color)
+  local t = D.tics[1]
+  if not t then msg("JTAC: No troops in contact tasking active.") return end
+  D.ticSmoke(t, color, false)
+end
+
+function D.ticToggleStrobe()
+  local t = D.tics[1]
+  if not t then msg("JTAC: No troops in contact tasking active.") return end
+  D.ticStrobe(t, not t.ir)
+  msg(t.ir and "JTAC: Friendlies IR strobe ON (visible with NVG/NVD)." or "JTAC: Friendlies IR strobe OFF.")
+end
+
+function D.ticMarkEnemy()
+  local t = D.tics[1]
+  if not t then msg("JTAC: No troops in contact tasking active.") return end
+  local u = nearestEnemy(t)
+  if not u then msg("JTAC: No enemy in sight.") return end
+  trigger.action.smoke(toV3(toV2(u:getPoint())), trigger.smokeColor.Red)
+  msg("JTAC: Nearest enemy marked with RED smoke.")
+end
+
+function D.ticLase()
+  local t = D.tics[1]
+  if not t then msg("JTAC: No troops in contact tasking active.") return end
+  if t.laser then
+    pcall(function() t.laser:destroy() end)
+    t.laser, t.laserUnit = nil, nil
+    msg("JTAC: Laser off.")
+    return
+  end
+  local src = aliveUnits(t.friend)[1]
+  local tgt = nearestEnemy(t)
+  if not src or not tgt then msg("JTAC: No target to lase.") return end
+  local ok, spot = pcall(Spot.createLaser, src, { x = 0, y = 2, z = 0 }, tgt:getPoint(), D.cfg.tic.laserCode)
+  if not ok or not spot then reportError("TIC", "could not create laser spot: " .. tostring(spot)) return end
+  t.laser, t.laserUnit = spot, tgt:getName()
+  msg(string.format("JTAC: Laser on target, code %d.", D.cfg.tic.laserCode))
+  if not D.laserRunning then
+    D.laserRunning = true
+    timer.scheduleFunction(function(_, now)
+      local ok2, nxt = pcall(D.laserTick, now)
+      if ok2 and nxt then return nxt end
+      D.laserRunning = false
+      return nil
+    end, nil, timer.getTime() + 1)
+  end
+end
+
+function D.laserTick(now)
+  local any = false
+  for _, t in ipairs(D.tics) do
+    if t.laser then
+      local u = t.laserUnit and Unit.getByName(t.laserUnit)
+      if not (u and u:isExist() and u:getLife() >= 1) then
+        u = nearestEnemy(t)
+        t.laserUnit = u and u:getName() or nil
+        if u then msg("JTAC: Target destroyed – shifting laser to the next target.") end
+      end
+      if u then
+        pcall(function() t.laser:setPoint(u:getPoint()) end)
+        any = true
+      else
+        pcall(function() t.laser:destroy() end)
+        t.laser = nil
+        msg("JTAC: No more targets – laser off.")
+      end
+    end
+  end
+  if any then return now + 1 end
+  return nil
+end
+
+function D.reportTic()
+  if #D.tics == 0 then msg("JTAC: No troops in contact tasking active.") return end
+  local lines = {}
+  for _, t in ipairs(D.tics) do
+    local _, fp = ticUnitPos(t)
+    local enemies = ticEnemies(t)
+    local best, bd = nearestEnemy(t)
+    lines[#lines + 1] = string.format("JTAC SITREP – TROOPS IN CONTACT\nFriendlies: %d/%d, %s\n   Marked: %s%s\nEnemy: %d remaining (wave %d/%d)",
+      groupAliveCount(t.friend), t.friendInitial, D.fmtPos(fp),
+      t.autoMarked and "smoke" or "not yet marked", t.ir and " + IR strobe" or "",
+      #enemies, t.waves, D.cfg.tic.waves)
+    if best then
+      local bp = toV2(best:getPoint())
+      lines[#lines + 1] = string.format("Nearest enemy: %s, bearing %03d, %.1f km from friendlies\n   %s\n   Mark: ask for red smoke or laser code %d",
+        best:getTypeName(), bearingDeg(fp, bp), bd / 1000, D.fmtPos(bp), D.cfg.tic.laserCode)
+    else
+      lines[#lines + 1] = "No enemy in sight."
+    end
+  end
+  msg(table.concat(lines, "\n"))
+end
+
+function D.spawnTicWave(t)
+  local cfg = D.cfg.tic
+  local tpl = cfg.waveTemplates[math.random(#cfg.waveTemplates)]
+  local sp
+  for _ = 1, 40 do
+    local a = t.axis + (math.random() - 0.5) * math.rad(40)
+    local q = offset(t.p, a, randRange(cfg.spawnDistance))
+    if okGround(q) then sp = q break end
+  end
+  if not sp then
+    reportError("TIC", "no ground found for the enemy wave")
+    return false
+  end
+  local hdg = math.atan2(t.p.y - sp.y, t.p.x - sp.x)
+  local gname = nextId("TICE")
+  local units = {}
+  for i, typ in ipairs(tpl) do
+    local u = offset(sp, hdg + math.pi / 2, (i - (#tpl + 1) / 2) * 25)
+    units[i] = { name = gname .. "-" .. i, type = typ, x = u.x, y = u.y, heading = hdg,
+                 skill = D.cfg.skill, playerCanDrive = false }
+  end
+  local function wp(p)
+    return { x = p.x, y = p.y, type = "Turning Point", action = "Off Road", speed = cfg.enemySpeed,
+             speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
+  end
+  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
+    { name = gname, task = "Ground Nothing", hidden = true, units = units, route = { points = { wp(sp), wp(offset(t.p, hdg + math.pi, 150)) } } })
+  local alive = groupAliveCount(gname)
+  if alive < #tpl then
+    reportError("TIC", string.format("only %d of %d enemy units spawned – check type names in D.cfg.tic.waveTemplates", alive, #tpl))
+    if alive == 0 then return false end
+  end
+  t.enemies[#t.enemies + 1] = gname
+  t.enemyInitial = t.enemyInitial + alive
+  t.waves = t.waves + 1
+  t.nextWave = timer.getTime() + cfg.waveInterval
+  msg(string.format("JTAC: Wave %d/%d – %d enemy vehicles/troops advancing on our position from bearing %03d, %.1f km out.",
+    t.waves, cfg.waves, alive, bearingDeg(t.p, sp), dist(t.p, sp) / 1000))
+  return true
+end
+
+function D.spawnTic(manual)
+  local cfg = D.cfg.tic
+  if not cfg.enabled then return false end
+  if #D.tics >= cfg.maxActive then
+    if manual then msg("TIC: Maximum number of active taskings reached.") end
+    return false
+  end
+  local aos = aoCandidates(nil)
+  local p, ao = D.findSpot(aos, nil, 0)
+  if not p then
+    if manual then msg("TIC: No suitable area found – try again later.") end
+    return false
+  end
+
+  local gname = nextId("TICF")
+  local units = {}
+  for i, typ in ipairs(cfg.friendlies) do
+    local u = offset(p, math.random() * 2 * math.pi, 15 + math.random() * 50)
+    units[i] = { name = gname .. "-" .. i, type = typ, x = u.x, y = u.y, heading = math.random() * 2 * math.pi,
+                 skill = "High", playerCanDrive = false }
+  end
+  coalition.addGroup(D.cfg.blueCountry, Group.Category.GROUND, { name = gname, task = "Ground Nothing", units = units })
+  local alive = groupAliveCount(gname)
+  if alive < #cfg.friendlies then
+    reportError("TIC", string.format("only %d of %d friendly units spawned – check type names in D.cfg.tic.friendlies", alive, #cfg.friendlies))
+    if alive == 0 then return false end
+  end
+
+  local t = { friend = gname, friendInitial = alive, p = p, ao = ao, axis = math.random() * 2 * math.pi,
+              waves = 0, enemies = {}, enemyInitial = 0, started = timer.getTime(), nextWave = timer.getTime() + 60 }
+  D.tics[#D.tics + 1] = t
+  if D.cfg.mapMarks then
+    t.mark = newMarkId()
+    trigger.action.markToCoalition(t.mark, "TROOPS IN CONTACT (friendlies)", toV3(p), D.cfg.blueSide, true)
+  end
+  msg(string.format("TROOPS IN CONTACT [%s]: Friendly ground forces (%d) are holding a position and expect an enemy attack in minutes.\nPosition: %s\nThey will mark with smoke and IR strobe when you are close (or use the F10 menu: Side Missions > JTAC). Destroy the attacking enemy forces in %d waves. Watch for danger close.",
+    ao and ao.name or "AO", alive, D.fmtPos(p), cfg.waves))
+  return true
+end
+
+function D.requestTic() D.spawnTic(true) end
+
+function D.ticTick(now, players)
+  local cfg = D.cfg.tic
+  for i = #D.tics, 1, -1 do
+    local t = D.tics[i]
+    if t.waves < cfg.waves and now >= t.nextWave then D.spawnTicWave(t) end
+
+    local fAlive = groupAliveCount(t.friend)
+    local eAlive = #ticEnemies(t)
+
+    if not t.autoMarked then
+      for _, q in ipairs(players) do
+        if dist(q, t.p) < cfg.autoMarkRange then
+          t.autoMarked = true
+          D.ticSmoke(t, "green", true)
+          D.ticStrobe(t, true)
+          msg("JTAC: Friendlies marking position with GREEN smoke and IR strobe. Confirm visual.")
+          break
+        end
+      end
+    end
+    if t.ir and t.irUnit then
+      local u = Unit.getByName(t.irUnit)
+      if not (u and u:isExist() and u:getLife() >= 1) then D.ticStrobe(t, true) end
+    end
+
+    local verdict
+    if (1 - fAlive / t.friendInitial) * 100 >= cfg.lossPercent then
+      verdict = "lost"
+    elseif t.waves >= cfg.waves and eAlive <= math.floor(t.enemyInitial * (1 - cfg.successPercent / 100)) then
+      verdict = "success"
+    elseif now - t.started >= cfg.maxTime then
+      verdict = "expired"
+    end
+    if verdict then
+      table.remove(D.tics, i)
+      if t.mark then trigger.action.removeMark(t.mark) end
+      if t.ir then pcall(function() t.ir:destroy() end) end
+      if t.laser then pcall(function() t.laser:destroy() end) end
+      if verdict == "success" then
+        D.stats.tic = D.stats.tic + 1
+        msg(string.format("JTAC: Enemy attack defeated, friendlies hold the position. Good work! (%d total)", D.stats.tic))
+      elseif verdict == "lost" then
+        msg("JTAC: Friendly position overrun. Tasking failed.")
+      else
+        msg("JTAC: Situation stabilised, friendlies are withdrawing. Tasking ended.")
+      end
+      local list = { t.friend }
+      for _, g in ipairs(t.enemies) do list[#list + 1] = g end
+      scheduleCleanup(list, cfg.cleanupAfter)
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
 -- KAMPAGNE (Flugplätze)
 -------------------------------------------------------------------------------
 function D.spawnGarrison(ao)
@@ -2110,8 +2745,8 @@ function D.reportCampaign()
 end
 
 function D.reportStats()
-  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nEnemy CAPs: %d\nAirfields: %d",
-    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.cap, D.capturedCount))
+  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nEnemy CAPs: %d\nAirfields: %d",
+    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.cap, D.capturedCount))
 end
 
 -------------------------------------------------------------------------------
@@ -2163,8 +2798,11 @@ function D.update()
     end
   end
 
-  -- Schiffsziele
+  -- Schiffsziele und Nebenaufträge
   D.shipTick(now, players)
+  D.convoyTick(now)
+  D.deepTick(now)
+  D.ticTick(now, players)
 
   -- CAP
   for i = #D.caps, 1, -1 do
@@ -2188,6 +2826,15 @@ function D.update()
   end
   if D.cfg.ship.enabled and D.cfg.ship.autoSpawn and now >= D.nextShip then
     D.nextShip = D.spawnShip(nil, false) and (now + randRange(D.cfg.ship.autoInterval)) or (now + 120)
+  end
+  if D.cfg.convoy.enabled and D.cfg.convoy.autoSpawn and now >= D.nextConvoy then
+    D.nextConvoy = D.spawnConvoy(false) and (now + randRange(D.cfg.convoy.autoInterval)) or (now + 120)
+  end
+  if D.cfg.deepStrike.enabled and D.cfg.deepStrike.autoSpawn and now >= D.nextDeep then
+    D.nextDeep = D.spawnDeepStrike(false) and (now + randRange(D.cfg.deepStrike.autoInterval)) or (now + 120)
+  end
+  if D.cfg.tic.enabled and D.cfg.tic.autoSpawn and now >= D.nextTic then
+    D.nextTic = D.spawnTic(false) and (now + randRange(D.cfg.tic.autoInterval)) or (now + 120)
   end
   if D.cfg.cap.enabled and D.cfg.cap.autoChance > 0 and now >= D.nextCapRoll then
     if #D.caps < D.cfg.cap.maxActive and math.random() < D.cfg.cap.autoChance then D.spawnCAP() end
@@ -2223,6 +2870,9 @@ function D.start()
   D.nextSam = now + 5
   D.nextCas = now + D.cfg.cas.firstDelay
   D.nextShip = now + D.cfg.ship.firstDelay
+  D.nextConvoy = now + D.cfg.convoy.firstDelay
+  D.nextDeep = now + D.cfg.deepStrike.firstDelay
+  D.nextTic = now + D.cfg.tic.firstDelay
   D.nextCapRoll = now + randRange(D.cfg.cap.autoInterval)
 
   timer.scheduleFunction(D.tick, nil, now + 2)
@@ -2267,6 +2917,26 @@ function D.buildMenu()
         shipMenu, safe(function() D.requestShip(i) end, "Menu"))
     end
     missionCommands.addCommandForCoalition(side, "Active taskings", shipMenu, safe(D.reportShips, "Menu"))
+  end
+  local sq = missionCommands.addSubMenuForCoalition(side, "Side Missions", root)
+  if D.cfg.convoy.enabled then
+    missionCommands.addCommandForCoalition(side, "Convoy: Request intercept tasking", sq, safe(D.requestConvoy, "Menu"))
+    missionCommands.addCommandForCoalition(side, "Convoy: Status and route", sq, safe(D.reportConvoy, "Menu"))
+  end
+  if D.cfg.deepStrike.enabled then
+    missionCommands.addCommandForCoalition(side, "Deep Strike: Request tasking", sq, safe(D.requestDeepStrike, "Menu"))
+    missionCommands.addCommandForCoalition(side, "Deep Strike: Status", sq, safe(D.reportDeepStrike, "Menu"))
+  end
+  if D.cfg.tic.enabled then
+    missionCommands.addCommandForCoalition(side, "TIC: Request troops-in-contact tasking", sq, safe(D.requestTic, "Menu"))
+    local jt = missionCommands.addSubMenuForCoalition(side, "JTAC", sq)
+    missionCommands.addCommandForCoalition(side, "Situation report", jt, safe(D.reportTic, "Menu"))
+    missionCommands.addCommandForCoalition(side, "Friendlies: green smoke", jt, safe(function() D.ticMarkFriendly("green") end, "Menu"))
+    missionCommands.addCommandForCoalition(side, "Friendlies: orange smoke", jt, safe(function() D.ticMarkFriendly("orange") end, "Menu"))
+    missionCommands.addCommandForCoalition(side, "Friendlies: white smoke", jt, safe(function() D.ticMarkFriendly("white") end, "Menu"))
+    missionCommands.addCommandForCoalition(side, "Friendlies: IR strobe on/off", jt, safe(D.ticToggleStrobe, "Menu"))
+    missionCommands.addCommandForCoalition(side, "Enemy: mark with red smoke", jt, safe(D.ticMarkEnemy, "Menu"))
+    missionCommands.addCommandForCoalition(side, "Enemy: laser on/off", jt, safe(D.ticLase, "Menu"))
   end
   missionCommands.addCommandForCoalition(side, "Statistics", root, safe(D.reportStats, "Menu"))
   if D.cfg.debugMenu and D.cfg.mode == "airbases" then
@@ -2372,12 +3042,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.4 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.5 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.4 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.5 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
