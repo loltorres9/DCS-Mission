@@ -5,6 +5,7 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
   python tools/miz_tool.py info      MISSION.miz
   python tools/miz_tool.py embed     MISSION.miz src/DynSEAD.lua            [-o OUT.miz]
   python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [-o OUT.miz]
+  python tools/miz_tool.py options   MISSION.miz optionsView=optview_all [-o OUT.miz]
   python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio [1-3]] [-o OUT.miz]
 
 Ohne -o wird die Eingabedatei überschrieben (vorher wird eine .bak angelegt).
@@ -258,6 +259,25 @@ def cmd_voice(a):
     print("WICHTIG: Mission danach NICHT mehr im Editor speichern (Editor entfernt nicht verknüpfte WAVs).")
     miz.save(a.out)
 
+# ----------------------------------------------------------------- options
+def cmd_options(a):
+    """Schwierigkeitsoptionen der Mission setzen (Abschnitt ["difficulty"] der Datei 'options')."""
+    miz = Miz(a.miz)
+    txt = miz.files["options"].decode("utf-8")
+    m = re.search(r'\["difficulty"\]\s*=\s*\n\s*\{.*?\}, -- end of \["difficulty"\]', txt, re.S)
+    if not m: sys.exit("Abschnitt difficulty nicht gefunden")
+    block = m.group(0)
+    for kv in a.pairs:
+        key, _, val = kv.partition("=")
+        lit = val if val in ("true", "false") or re.fullmatch(r"-?\d+(\.\d+)?", val) else '"%s"' % val
+        pat = re.compile(r'(\["%s"\]\s*=\s*)("[^"]*"|true|false|-?\d+(\.\d+)?)' % re.escape(key))
+        if not pat.search(block): sys.exit("Option nicht gefunden: " + key)
+        old = pat.search(block).group(2)
+        block = pat.sub(lambda mm: mm.group(1) + lit, block, count=1)
+        print("%s: %s -> %s" % (key, old, lit))
+    miz.files["options"] = (txt[:m.start()] + block + txt[m.end():]).encode("utf-8")
+    miz.save(a.out)
+
 # ----------------------------------------------------------------- main
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -267,6 +287,7 @@ if __name__ == "__main__":
     s = sp.add_parser("templates"); s.add_argument("miz"); s.add_argument("--base", required=True)
     s.add_argument("--types", nargs="*", help="Labels/Typen, z.B. F-16 A-10C_2 (Standard: alle)")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
+    s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")
     s.add_argument("--radio", nargs="?", type=int, const=2, default=0, choices=[0, 1, 2, 3], help="Funkfilter: 1 leicht, 2 normal (Standard bei --radio), 3 stark verzerrt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_voice)
     a = p.parse_args(); a.f(a)
