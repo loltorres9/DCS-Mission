@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.10 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.11 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -48,6 +48,7 @@ D.cfg = {
   debugMenu       = true,          -- F10-Befehle zum Testen (später false)
   debugShowAll    = false,         -- true: alle Gruppen beider Seiten als Textmarker auf der F10-Karte (auch per F10 > DEBUG schaltbar)
   debugMapInterval = 15,           -- Aktualisierung der Test-Marker in s
+  debugVisibleUnits = true,        -- zum Testen: rote Bodengruppen NICHT auf der F10-Karte verstecken (normal: false, dann nur per ELINT-Marker)
   showErrors      = true,          -- Skriptfehler im Spiel anzeigen
   fallbackStart   = 120,
 
@@ -432,6 +433,9 @@ D.awacsRespawnAt = nil
 -------------------------------------------------------------------------------
 -- HILFSFUNKTIONEN
 -------------------------------------------------------------------------------
+-- Skript-Gruppen sind standardmäßig auf der F10-Karte versteckt (Position nur über ELINT/Meldungen); zum Testen sichtbar
+function D.hideOnMap() return not D.cfg.debugVisibleUnits end
+
 local function msg(text)
   trigger.action.outTextForCoalition(D.cfg.blueSide, text, D.cfg.msgTime)
 end
@@ -881,7 +885,7 @@ function D.spawnSam()
   local gname = nextId("SAM-" .. key)
   local units, crit = buildSamUnits(def, p, gname)
   coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = true, units = units })
+    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
 
   local now = timer.getTime()
   local errMax = D.cfg.sam.intelError
@@ -905,7 +909,7 @@ function D.spawnSam()
     local pp = offset(p, math.random() * 2 * math.pi, pd.dist)
     site.pdGroup = gname .. "-PD"
     coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND, {
-      name = site.pdGroup, task = "Ground Nothing", hidden = true,
+      name = site.pdGroup, task = "Ground Nothing", hidden = D.hideOnMap(),
       units = { { name = site.pdGroup .. "-1", type = pd.unit, x = pp.x, y = pp.y,
                   heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false } } })
   end
@@ -1429,7 +1433,7 @@ function D.spawnManpadsZones(ao)
 
       if #units > 0 then
         coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-          { name = gname, task = "Ground Nothing", hidden = true, units = units })
+          { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
         local entry = { group = gname, center = c }
         D.drawManpads(entry)
         ao.manpads[#ao.manpads + 1] = entry
@@ -1676,7 +1680,7 @@ function D.spawnCAS(manual)
   end
 
   coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = true, units = units, route = route })
+    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = route })
 
   D.casTasks[#D.casTasks + 1] = { group = gname, name = tpl.name, initial = #units, convoy = isConvoy, ao = ao,
     manpads = hasManpads }
@@ -2105,7 +2109,7 @@ function D.spawnConvoy(manual)
              speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
   end
   coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = true, units = units, route = { points = { wp(sp), wp(ep) } } })
+    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = { points = { wp(sp), wp(ep) } } })
 
   local alive = groupAliveCount(gname)
   if alive < n then
@@ -2246,7 +2250,7 @@ function D.spawnDeepStrike(manual)
       heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false }
   end
   coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = true, units = units })
+    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
 
   tg.used = true
   local t = { name = tg.name, obj = objName, def = gname, p = p, mark = nil }
@@ -2507,7 +2511,7 @@ function D.spawnTicWave(t)
              speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
   end
   coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = true, units = units, route = { points = { wp(sp), wp(offset(t.p, hdg + math.pi, 150)) } } })
+    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = { points = { wp(sp), wp(offset(t.p, hdg + math.pi, 150)) } } })
   local alive = groupAliveCount(gname)
   if alive < #tpl then
     reportError("TIC", string.format("only %d of %d enemy units spawned – check type names in D.cfg.tic.waveTemplates", alive, #tpl))
@@ -2639,7 +2643,7 @@ function D.spawnGarrison(ao)
       heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false }
   end
   coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = true, units = units })
+    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
   ao.garrison = gname
   ao.garrisonInit = #units
   ao.garrisonDone = false
@@ -3211,12 +3215,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.10 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.11 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.10 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.11 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
