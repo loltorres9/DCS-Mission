@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.26 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.27 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -69,10 +69,8 @@ D.cfg = {
   sam = {
     maxActive         = 12,        -- SAM-Stellungen gleichzeitig (gesamt, alle AOs)
     spawnAll          = true,      -- alle SAM-Stellungen einer AO erscheinen sofort beim Aktivieren (nicht nacheinander)
-    showIntel         = false,     -- false = keine SAM-Standortinfos (keine Kartenmarker, keine ELINT-Meldungen, keine Peilungen im SITREP)
     respawnDelay      = {120, 300},
     minSeparation     = 12000,
-    intelError        = 7000,      -- Start-Ungenauigkeit (m), wird per ELINT kleiner
     shoradChance      = 0.5,
     cleanupAfter      = 900,
     armEvasion = {
@@ -129,19 +127,6 @@ D.cfg = {
       SA10 = { always = 1 },
     },
     pool              = { SA2 = 2, SA3 = 3, SA6 = 3, SA11 = 2, SA8 = 2, SA15 = 1 },
-  },
-
-  elint = {
-    enabled      = true,
-    awacsRange   = 250000,         -- Reichweite AWACS-ELINT (m)
-    awacsFactor  = 0.985,           -- Fehler * Faktor pro Tick (10 s) bei Ortung durch AWACS
-    players      = true,           -- Spieler in der Luft orten ebenfalls
-    playerRange  = 80000,
-    playerFactor = 0.99,
-    errPerKm     = 10,             -- beste Genauigkeit wächst mit Sensor-Entfernung (m pro km)
-    minError     = 400,            -- absolute Untergrenze (m)
-    locatedAt    = 600,            -- ab hier gilt die Stellung als "LOCATED"
-    announceAt   = {3500, 1800},    -- Meldung, wenn diese Genauigkeit unterschritten wird
   },
 
   awacs = {
@@ -1018,35 +1003,7 @@ function D.setRadar(site, on)
   if not c then return end
   c:setOption(AI.Option.Ground.id.ALARM_STATE,
     on and AI.Option.Ground.val.ALARM_STATE.RED or AI.Option.Ground.val.ALARM_STATE.GREEN)
-  local wasOn = site.radarOn
   site.radarOn = on
-  if on and not wasOn and site.ao and D.cfg.sam.showIntel then
-    local now = timer.getTime()
-    if site.announceBack then
-      site.announceBack = nil
-      D.say({ tSam(site.key), "back_up", tBE(site.intelPos) })
-    elseif site.mode == "ambush" and (not site.lastPopup or now - site.lastPopup > D.cfg.voice.popupCooldown) then
-      site.lastPopup = now
-      D.say({ "popup", tSam(site.key), "now_active", tBE(site.intelPos), "check_six" })
-    end
-  end
-end
-
--- Intel-Position = wahre Position + fester Versatz, der mit dem Fehler schrumpft
-function D.updateIntelPos(s)
-  local k = s.err / s.errMax
-  s.intelPos = { x = s.pos.x + s.offX * k, y = s.pos.y + s.offY * k }
-end
-
-function D.updateMark(s)
-  if not D.cfg.mapMarks or not D.cfg.sam.showIntel then return end
-  if s.mark then trigger.action.removeMark(s.mark) end
-  s.mark = newMarkId()
-  local quality = (s.err <= D.cfg.elint.locatedAt) and ("LOCATED ±" .. fmtDist(s.err)) or ("±" .. fmtDist(s.err))
-  trigger.action.markToCoalition(s.mark,
-    string.format("[%s] Suspected %s (%s)", s.ao.name, s.def.name, quality),
-    toV3(s.intelPos), D.cfg.blueSide, true)
-  s.markErr = s.err
 end
 
 function D.spawnSam()
@@ -1067,8 +1024,8 @@ function D.spawnSam()
   return D.createSam(ao, weighted(D.cfg.sam.pool), p)
 end
 
--- Eine SAM-Stellung des Typs key an Position p in der AO ao erzeugen (quiet: keine Einzelmeldung)
-function D.createSam(ao, key, p, errMax, quiet, forceMode)
+-- Eine SAM-Stellung des Typs key an Position p in der AO ao erzeugen
+function D.createSam(ao, key, p, forceMode)
   local def = D.samTypes[key]
   local gname = nextId("SAM-" .. key)
   local units, crit = buildSamUnits(def, p, gname)
@@ -1076,21 +1033,15 @@ function D.createSam(ao, key, p, errMax, quiet, forceMode)
     { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
 
   local now = timer.getTime()
-  errMax = errMax or D.cfg.sam.intelError
-  local a = math.random() * 2 * math.pi
-  local d = errMax * math.sqrt(math.random())
   local site = {
     group = gname, key = key, def = def, pos = p, critical = crit, ao = ao,
     mode = forceMode or weighted((D.cfg.sam.modesByType or {})[key] or D.cfg.sam.modes), radarOn = true,
     ambushRange = ((D.cfg.sam.engageRange or {})[key] and D.cfg.sam.engageRange[key] * D.cfg.sam.ambushFactor)
                   or D.cfg.sam.ambushRange,
     nextToggle = now + randRange(D.cfg.sam.blinkOn),
-    errMax = errMax, err = errMax, offX = d * math.cos(a), offY = d * math.sin(a),
   }
-  D.updateIntelPos(site)
   ao.samLeft = ao.samLeft - 1
   ao.samActive = ao.samActive + 1
-  D.updateMark(site)
 
   local pd = D.cfg.sam.pointDefense
   if pd and pd.types[key] and math.random() < pd.chance then
@@ -1117,11 +1068,6 @@ function D.createSam(ao, key, p, errMax, quiet, forceMode)
   env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
     key, D.siting.tested, D.siting.scenery, D.siting.urban, D.siting.slope, D.siting.horizon, D.siting.zone,
     D.siting.apiFailed and " (scenery search unavailable)" or ""))
-  if not quiet and D.cfg.sam.showIntel then
-    D.say({ "all_players", "new_threat", tSam(key), tBE(site.intelPos), tDist(site.err), "area", tPlace(ao.name) })
-    msg(string.format("INTEL [%s]: New threat reported – %s.\nApprox. position (±%s): %s",
-      ao.name, def.name, fmtDist(site.err), D.fmtPos(site.intelPos)))
-  end
   return true
 end
 
@@ -1168,18 +1114,8 @@ function D.startRelocation(s)
 end
 
 function D.finishRelocation(s, p, now)
-  -- Marker bleibt an der alten Intel-Position, Unsicherheit wächst entsprechend
-  local old = s.intelPos
-  local ox, oy = old.x - p.x, old.y - p.y
-  local off = math.sqrt(ox * ox + oy * oy)
   s.pos = p
-  s.err = math.max(s.err, off * 1.1, 500)
-  s.errMax = s.err
-  s.offX, s.offY = ox, oy
-  D.updateIntelPos(s)
-  D.updateMark(s)
   s.moving = nil
-  s.relocated = true
   s.setupUntil = now + randRange(D.cfg.sam.relocate.setupTime)
 end
 
@@ -1311,7 +1247,6 @@ function D.updateArms()
         if a.reactAt and now >= a.reactAt then
           a.site = s
           s.armDark = (s.armDark or 0) + 1
-          if s.radarOn then D.say({ tSam(s.key), "gone_silent" }) end
           D.setRadar(s, false)
         end
       end
@@ -1660,7 +1595,6 @@ function D.redrawAll()
       if groupAliveCount(m.group) > 0 then D.drawManpads(m) end
     end
   end
-  for _, site in ipairs(D.sites) do D.updateMark(site) end
 end
 
 function D.scheduleRedraw()
@@ -1748,69 +1682,6 @@ function D.reportNav()
     end
   end
   msg(table.concat(lines, "\n"))
-end
-
-function D.elint()
-  local cfg = D.cfg.elint
-  if not cfg.enabled or not D.cfg.sam.showIntel then return end
-
-  local sensors = {}
-  local aw = D.awacsUnit()
-  if aw then sensors[#sensors + 1] = { p = aw:getPoint(), range = cfg.awacsRange, factor = cfg.awacsFactor } end
-  if cfg.players then
-    for _, u in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
-      if u and u:isExist() and u:inAir() then
-        sensors[#sensors + 1] = { p = u:getPoint(), range = cfg.playerRange, factor = cfg.playerFactor }
-      end
-    end
-  end
-  if #sensors == 0 then return end
-
-  for _, s in ipairs(D.sites) do
-    if s.radarOn and s.err > cfg.minError then
-      local sp = toV3(s.pos)
-      sp.y = sp.y + 15
-      -- jeder Sensor mit Sichtlinie verkleinert den Fehler, aber nur bis zu seiner
-      -- entfernungsabhängigen Genauigkeitsgrenze; der beste Sensor zählt
-      local newErr = s.err
-      for _, sn in ipairs(sensors) do
-        local d = dist(toV2(sn.p), s.pos)
-        if d <= sn.range and land.isVisible(sn.p, sp) then
-          local floor = math.max(cfg.minError, d / 1000 * cfg.errPerKm)
-          if s.err > floor then
-            newErr = math.min(newErr, math.max(floor, s.err * sn.factor))
-          end
-        end
-      end
-
-      if newErr < s.err then
-        local old = s.err
-        s.err = newErr
-        D.updateIntelPos(s)
-        if not s.markErr or s.err < s.markErr * 0.8 or s.err <= cfg.locatedAt then D.updateMark(s) end
-
-        if s.relocated then
-          s.relocated = nil
-          D.say({ "heads_up", tSam(s.key), "relocated", "new_emissions", tBE(s.intelPos), tDist(s.err), "prev_invalid" })
-          msg(string.format("ELINT [%s]: %s emitting from a NEW position – it has relocated!\nPrevious fix invalid. Current estimate (±%s): %s",
-            s.ao.name, s.def.name, fmtDist(s.err), D.fmtPos(s.intelPos)))
-        elseif s.err <= cfg.locatedAt and old > cfg.locatedAt then
-          D.say({ tSam(s.key), "located", tBE(s.intelPos), "coords_f10" })
-          msg(string.format("ELINT [%s]: %s LOCATED (±%s).\nPosition: %s",
-            s.ao.name, s.def.name, fmtDist(s.err), D.fmtPos(s.intelPos)))
-        else
-          for _, th in ipairs(cfg.announceAt) do
-            if old > th and s.err <= th then
-              D.say({ "update", tSam(s.key), tBE(s.intelPos), "now", tDist(s.err) })
-              msg(string.format("ELINT [%s]: %s position refined to ±%s.\nPosition: %s",
-                s.ao.name, s.def.name, fmtDist(s.err), D.fmtPos(s.intelPos)))
-              break
-            end
-          end
-        end
-      end
-    end
-  end
 end
 
 -------------------------------------------------------------------------------
@@ -3054,7 +2925,7 @@ function D.activateFortress(manual)
       end
       if p then
         placed[#placed + 1] = p
-        D.createSam(ao, layer.key, p, cfg.intelError, true, "always")   -- Hauptbasis: alle Radare strahlen dauerhaft
+        D.createSam(ao, layer.key, p, "always")   -- Hauptbasis: alle Radare strahlen dauerhaft
         built = built + 1
         kinds[layer.key] = (kinds[layer.key] or 0) + 1
       else
@@ -3286,7 +3157,6 @@ function D.debugCapture()
     if s.ao == ao then
       destroyGroup(s.group)
       if s.pdGroup then destroyGroup(s.pdGroup) end
-      if s.mark then trigger.action.removeMark(s.mark) end
       table.remove(D.sites, i)
     end
   end
@@ -3642,28 +3512,11 @@ end
 -------------------------------------------------------------------------------
 -- BERICHTE
 -------------------------------------------------------------------------------
-function D.voicePicture()
-  if not D.cfg.sam.showIntel then return end
-  if not D.voiceOK then msg("Overlord voice not available (voice files missing, see dcs.log).") return end
-  if #D.sites == 0 then D.say({ "no_sites" }) return end
-  local t = { "threat_picture", tNum(#D.sites), "sites" }
-  for _, s in ipairs(D.sites) do
-    t[#t + 1] = { tSam(s.key), tBE(s.intelPos), s.radarOn and "active" or "silent" }
-  end
-  D.say(t)
-end
-
 function D.reportSEAD()
-  if #D.sites == 0 then msg("SEAD: No known SAM sites active.") return end
-  local lines = { D.cfg.sam.showIntel and "SEAD SITREP:" or "SEAD SITREP (locations unknown – find them yourself):" }
-  for i, s in ipairs(D.sites) do
-    if D.cfg.sam.showIntel then
-      local quality = (s.err <= D.cfg.elint.locatedAt) and ("LOCATED ±" .. fmtDist(s.err)) or ("±" .. fmtDist(s.err))
-      lines[#lines + 1] = string.format("%d) [%s] %s – %s – %s\n   %s", i, s.ao.name, s.def.name,
-        s.radarOn and "radar ACTIVE" or "radar silent", quality, D.fmtPos(s.intelPos))
-    else
-      lines[#lines + 1] = string.format("%d) [%s] %s", i, s.ao.name, s.def.name)
-    end
+  if #D.sites == 0 then msg("SEAD: No SAM sites active.") return end
+  local lines = { "SEAD SITREP (locations unknown – find them yourself):" }
+  for i, st in ipairs(D.sites) do
+    lines[#lines + 1] = string.format("%d) [%s] %s", i, st.ao.name, st.def.name)
   end
   lines[#lines + 1] = string.format("Neutralized so far: %d", D.stats.sam)
   msg(table.concat(lines, "\n"))
@@ -3713,7 +3566,6 @@ function D.update()
       table.remove(D.sites, i)
       s.ao.samActive = s.ao.samActive - 1
       D.stats.sam = D.stats.sam + 1
-      if s.mark then trigger.action.removeMark(s.mark) end
       msg(string.format("SEAD [%s]: %s site neutralized! (%d total)", s.ao.name, s.def.name, D.stats.sam))
       D.say({ "good_effect", tSam(s.key), "site_destroyed", tNum(D.stats.sam), "down" })
       if not s.ao.fortress then D.nextSam = math.max(D.nextSam, now + randRange(D.cfg.sam.respawnDelay)) end
@@ -3730,7 +3582,6 @@ function D.update()
   -- AWACS / ELINT
   D.checkAwacs(now)
   D.checkTankers(now)
-  D.elint()
 
   -- CAS
   for i = #D.casTasks, 1, -1 do
@@ -3853,9 +3704,6 @@ function D.buildMenu()
   cmd(info, "Campaign: Status", D.reportCampaign)
   cmd(info, "Navigation: AO steerpoints", D.reportNav)
   cmd(info, "SEAD: SITREP", D.reportSEAD)
-  if D.cfg.voice.enabled then
-    cmd(info, "Overlord: Request threat picture (voice)", D.voicePicture)
-  end
   cmd(info, "Threats: MANPADS areas", D.reportManpads)
   cmd(info, "Support: AWACS & tankers", D.reportSupport)
   if D.cfg.farp.enabled then cmd(info, "Forward FARPs: status", D.farpStatus) end
@@ -4020,12 +3868,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.26 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.27 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.26 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.27 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
