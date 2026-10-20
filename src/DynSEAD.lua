@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.38 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.39 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -13,12 +13,11 @@
 
   NEU in v3:
     - Alle Texte im Spiel auf Englisch
-    - AWACS "Overlord" (E-3A) mit ELINT: SAM-Positionen werden genauer,
-      solange das SAM-Radar sendet und Sichtlinie zum AWACS besteht
-    - Optional: Spieler-Flugzeuge in der Luft tragen ebenfalls (schwächer) zur Ortung bei
+    - Keine SAM-Positionen: pro AO nur Lagebild (SAM-Typen, MANPADS ja/nein)
+    - Läuft auf Caucasus und Syria; kartenspezifische Werte in D.cfg.maps
 
   Editor-Voraussetzungen (Modus "airbases"):
-    1. Startflugplatz auf BLAU setzen (oder cfg.campaign.homeBase eintragen)
+    1. Startflugplatz auf BLAU setzen (oder cfg.campaign.homeBase bzw. D.cfg.maps[Karte].homeBases eintragen)
     2. Dynamic Spawn an allen Flugplätzen aktivieren, die erobert werden können
     3. Trigger: MISSIONSSTART / SKRIPTDATEI AUSFÜHREN -> diese Datei
 ]]
@@ -64,6 +63,27 @@ D.cfg = {
     maxDistance     = 0,           -- 0 = egal; sonst max. Entfernung zur nächsten blauen Basis
     aoSeparation    = 85000,       -- Mindestabstand der Mittelpunkte gleichzeitig aktiver AOs (m), ca. 2 x aoRadius + Puffer: Kreise überlappen nicht
     captureDelay    = 60,
+  },
+
+  -- Kartenspezifische Einstellungen; gewählt nach env.mission.theatre. Überschreiben die allgemeinen Werte.
+  --   homeBases     : Flugplätze, die beim Start blau gesetzt werden
+  --   friendlyAreas : alle Flugplätze in diesen Lat/Lon-Rechtecken sind ebenfalls blau (kein Ziel)
+  --   exclude       : Flugplätze, die weder blau noch Ziel sind
+  --   deepStrike    : Deep-Strike-Ziele (Platzhalter-Koordinaten)
+  maps = {
+    Caucasus = {},                 -- Startbasis kommt aus dem Editor (Senaki-Kolkhi blau)
+    Syria = {
+      homeBases     = { "Incirlik" },
+      friendlyAreas = { { name = "Cyprus", latMin = 34.4, latMax = 35.8, lonMin = 32.0, lonMax = 34.8 } },
+      exclude       = {},
+      deepStrike = {
+        { name = "Command post near Damascus",      lat = 33.45, lon = 36.40, type = ".Command Center", category = "Fortifications" },
+        { name = "Ammunition depot near Homs",      lat = 34.70, lon = 36.80, type = "Warehouse",       category = "Warehouses" },
+        { name = "Fuel depot near Palmyra",         lat = 34.55, lon = 38.20, type = "Tank",            category = "Warehouses" },
+        { name = "Command post near Deir ez-Zor",   lat = 35.30, lon = 40.10, type = ".Command Center", category = "Fortifications" },
+        { name = "Supply depot near Hama",          lat = 35.15, lon = 36.85, type = "Warehouse",       category = "Warehouses" },
+      },
+    },
   },
 
   sam = {
@@ -4015,6 +4035,22 @@ function D.start()
   end
 end
 
+-- DEBUG: alle Flugplätze mit ID, Koalition und Position ins dcs.log (für die Spawn-Vorlagen auf neuen Karten)
+function D.debugListAirbases()
+  local n = 0
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local desc = ab:getDesc()
+    if desc and desc.category == Airbase.Category.AIRDROME then
+      local p = ab:getPoint()
+      local lat, lon = coord.LOtoLL(p)
+      env.info(string.format("DynSEAD AIRFIELD | %s | id=%s | coalition=%d | x=%.0f | y=%.0f | lat=%.5f | lon=%.5f",
+        ab:getName(), tostring(ab:getID()), ab:getCoalition(), p.x, p.z, lat, lon))
+      n = n + 1
+    end
+  end
+  msg(string.format("DEBUG: %d airfields written to dcs.log (search for \"DynSEAD AIRFIELD\").", n))
+end
+
 function D.buildMenu()
   -- DCS zeigt pro Menüebene nur etwa 10 Einträge: alles in Untermenüs (je höchstens 9 Einträge) gruppieren
   local side = D.cfg.blueSide
@@ -4091,6 +4127,7 @@ function D.buildMenu()
     cmd(dbg, "Show all units on map (on/off)", D.debugMapToggle)
     if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
+    cmd(dbg, "Write airfield list to dcs.log", D.debugListAirbases)
   end
 end
 
@@ -4134,14 +4171,29 @@ local function initZones()
   return true
 end
 
+local function inArea(ab, a)
+  local ok, lat, lon = pcall(function() return coord.LOtoLL(ab:getPoint()) end)
+  return ok and lat and lat >= a.latMin and lat <= a.latMax and lon >= a.lonMin and lon <= a.lonMax
+end
+
 local function initAirbases()
   local c = D.cfg.campaign
+  local map = D.map or {}
   local excluded = {}
   for _, n in ipairs(c.exclude or {}) do excluded[n] = true end
+  for _, n in ipairs(map.exclude or {}) do excluded[n] = true end
 
-  if c.homeBase then
-    local hb = Airbase.getByName(c.homeBase)
-    if hb then hb:setCoalition(D.cfg.blueSide) end
+  local homes = {}
+  if c.homeBase then homes[#homes + 1] = c.homeBase end
+  for _, n in ipairs(map.homeBases or {}) do homes[#homes + 1] = n end
+  for _, n in ipairs(homes) do
+    local hb = Airbase.getByName(n)
+    if hb then hb:setCoalition(D.cfg.blueSide) else env.warning("DynSEAD: home base not found: " .. n) end
+  end
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    for _, a in ipairs(map.friendlyAreas or {}) do
+      if inArea(ab, a) then pcall(function() ab:setCoalition(D.cfg.blueSide) end) break end
+    end
   end
 
   local home, targets = {}, {}
@@ -4185,6 +4237,10 @@ local function initVoice()
 end
 
 local function init()
+  D.theatre = (env.mission and env.mission.theatre) or "Caucasus"
+  D.map = D.cfg.maps[D.theatre] or {}
+  if D.map.deepStrike then D.cfg.deepStrike.targets = D.map.deepStrike end
+  env.info("DynSEAD: theatre " .. D.theatre)
   local ok
   if D.cfg.mode == "airbases" then ok = initAirbases() else ok = initZones() end
   if not ok then return end
@@ -4195,12 +4251,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.38 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.39 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.38 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.39 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
