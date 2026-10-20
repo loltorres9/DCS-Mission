@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.29 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.30 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -1085,6 +1085,19 @@ function D.createSam(ao, key, p, forceMode)
       end
     end
     D.setRadar(site, site.mode ~= "ambush")
+    -- Kontrolle: sind alle Einheiten der Stellung wirklich entstanden? (DCS verwirft Einheiten mit ungültigem Typnamen stillschweigend)
+    local g = Group.getByName(site.group)
+    local alive = g and g:isExist() and #(g:getUnits() or {}) or 0
+    env.info(string.format("DynSEAD: %s %s – %d of %d units spawned", key, gname, alive, #units))
+    if alive < #units then
+      local have = {}
+      for _, u in ipairs(g and g:isExist() and g:getUnits() or {}) do have[u:getTypeName()] = (have[u:getTypeName()] or 0) + 1 end
+      local missing = {}
+      for _, u in ipairs(units) do
+        if (have[u.type] or 0) > 0 then have[u.type] = have[u.type] - 1 else missing[#missing + 1] = u.type end
+      end
+      reportError("SAM", string.format("%s: only %d of %d units spawned, missing: %s", key, alive, #units, table.concat(missing, ", ")))
+    end
   end, "Radar"), nil, now + 3)
 
   env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
@@ -4036,12 +4049,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.29 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.30 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.29 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.30 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
