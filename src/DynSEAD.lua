@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.41 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.42 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -70,6 +70,7 @@ D.cfg = {
   --   friendly      : weitere Flugplätze, die beim Start blau sind (kein Ziel)
   --   friendlyAreas : alle Flugplätze in diesen Lat/Lon-Rechtecken sind ebenfalls blau (kein Ziel)
   --   exclude       : Flugplätze, die weder blau noch Ziel sind
+  --   tankers       : Tanker mit festen Strecken (ersetzt tankers.list)
   --   fronts        : mehrere Fronten mit je eigenen aktiven Zielen (ohne: eine Front, campaign.activeTargets)
   --   ignore        : Lua-Muster für Namen, die gar nicht als Flugplatz zählen (Syria meldet ~140 Hubschrauber-Landeplätze als Flugplatz)
   --   deepStrike    : Deep-Strike-Ziele (Platzhalter-Koordinaten)
@@ -87,6 +88,19 @@ D.cfg = {
       exclude       = {},
       ignore        = { "^H[%a_]+%d+$", "Heliport" },   -- HS02, HMed01, H_med_orig_03, HOil01 …; nicht H3/H4
       -- Fronten: jede Front hat eigene aktive Ziele und rückt von ihren Basen (plus eroberten Plätzen) aus vor
+      -- Tanker auf festen Strecken (ersetzen tankers.list); track = Start- und End-Lat/Lon der Race-Track-Strecke
+      tankers = {
+        -- Mittelmeer südöstlich von Zypern
+        { name = "Texaco", type = "KC-135",    kind = "boom",   callsignIndex = 1, flight = 1,
+          frequency = 255.0, tacan = 51, tacanId = "TEX", alt = 6100, speed = 165, track = { 34.45, 34.15, 34.15, 34.75 } },
+        { name = "Arco",   type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 1,
+          frequency = 256.0, tacan = 52, tacanId = "ARC", alt = 5500, speed = 160, track = { 34.55, 34.05, 34.25, 34.65 } },
+        -- Norden, türkische Seite der Grenze zu Syrien
+        { name = "Shell",  type = "KC-135",    kind = "boom",   callsignIndex = 3, flight = 1,
+          frequency = 257.0, tacan = 53, tacanId = "SHL", alt = 6700, speed = 165, track = { 37.25, 36.60, 37.25, 37.60 } },
+        { name = "Arco2",  type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 2, callsign = "Arco",
+          frequency = 258.0, tacan = 54, tacanId = "AR2", alt = 5800, speed = 160, track = { 37.40, 36.60, 37.40, 37.60 } },
+      },
       fronts = {
         { name = "North", active = 2, bases = { "Incirlik", "Adana Sakirpasa", "Chukurova", "Hatay", "Gaziantep",
                                                 "Kahramanmaras", "Sanliurfa", "Adiyaman", "Gulechoba", "Diyarbakir" } },
@@ -1550,6 +1564,12 @@ end
 
 -- Tanker-Orbit: auf der Linie AO -> nächste blaue Basis, außerhalb der SAM-Reichweite
 function D.tankerOrbit(t)
+  if t.track then   -- feste Strecke aus dem Kartenprofil
+    local a = coord.LLtoLO(t.track[1], t.track[2], 0)
+    local b = coord.LLtoLO(t.track[3], t.track[4], 0)
+    local p1, p2 = { x = a.x, y = a.z }, { x = b.x, y = b.z }
+    return p1, p2, { x = (p1.x + p2.x) / 2, y = (p1.y + p2.y) / 2 }
+  end
   D.refreshBlueBases()
   local ao = D.aos[1]
   if not ao or #D.blueBases == 0 then return nil end
@@ -1599,7 +1619,7 @@ function D.spawnTanker(t)
       name = t.name .. "-1", type = t.type,
       x = p1.x, y = p1.y, alt = t.alt, alt_type = "BARO", speed = t.speed, heading = hdg,
       skill = "Excellent",
-      callsign = { [1] = t.callsignIndex, [2] = 1, [3] = 1, name = t.name .. "11" },
+      callsign = { [1] = t.callsignIndex, [2] = t.flight or 1, [3] = 1, name = (t.callsign or t.name) .. (t.flight or 1) .. "1" },
       payload = { pylons = {}, fuel = 90700, flare = 0, chaff = 0, gun = 0 },
     } },
     route = { points = { airWP(p1, t.alt, t.speed, tankerTasks(t, p1, p2)), airWP(p2, t.alt, t.speed, {}) } },
@@ -1631,7 +1651,7 @@ function D.repositionTankers()
   local cfg = D.cfg.tankers
   if not cfg.enabled then return end
   for _, t in ipairs(cfg.list) do
-    local u = supportUnit(t.name)
+    local u = not t.track and supportUnit(t.name)   -- feste Strecken bleiben, wo sie sind
     if u then
       local p1, p2, c = D.tankerOrbit(t)
       if p1 then
@@ -4283,6 +4303,7 @@ end
 local function init()
   D.theatre = (env.mission and env.mission.theatre) or "Caucasus"
   D.map = D.cfg.maps[D.theatre] or {}
+  if D.map.tankers then D.cfg.tankers.list = D.map.tankers end
   if D.map.deepStrike then D.cfg.deepStrike.targets = D.map.deepStrike end
   env.info("DynSEAD: theatre " .. D.theatre)
   local ok
@@ -4308,12 +4329,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.41 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.42 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.41 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.42 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
