@@ -82,8 +82,9 @@ def cmd_info(a):
         if v.endswith(".lua"): print("   %s -> %s" % (k, v))
     print("Trigger beim Start:", m["trig"]["actions"].get(1))
     print("\nFlugplätze:")
+    known = theatre(miz) == "Caucasus"           # Namentabelle (geo.py) gibt es nur für Caucasus
     for i, ap in sorted(w["airports"].items()):
-        name = AIRFIELDS.get(i, ("?",))[0]
+        name = AIRFIELDS.get(i, ("?",))[0] if known else "?"
         links = []
         for cat in ("planes", "helicopters"):
             for t, e in ap["aircrafts"][cat].items():

@@ -14,6 +14,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 |---|---|
 | `src/DynSEAD.lua` | Missionsskript (aktuell v4.39). Version steht im Kopf als `DynSEAD vX.Y` |
 | `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.39 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten). Briefing (englisch) steht im Dictionary: `DictKey_descriptionText_1` (Lage), `DictKey_descriptionBlueTask_3` (Auftrag, Support, Lagebild, SAM-Gefechtsordnung, Nebenaufträge, F10-Menü) – bei Änderungen an SAM-Typen, Menü oder Intel mitpflegen |
+| `mission/Dynamic_Script_Syria.miz` | Syrien-Mission (gleiches Skript, Profil `D.cfg.maps.Syria`): Startbasis Incirlik (Airport-ID 16) mit 6 Dynamic-Spawn-Vorlagen (F-16C, F/A-18C, A-10C II, AJS-37, AH-64D, CH-47F als Transporter für FARP), Zypern freundlich, F10-Ansicht „All“ erzwungen, Briefing angepasst, keine Sprachdateien. Vorlagen an weiteren Plätzen fehlen noch (Flugplatz-IDs/Koordinaten aus „Write airfield list to dcs.log“ nötig) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -23,7 +24,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 
 ## Arbeitsablauf
 1. `src/DynSEAD.lua` ändern → **Version im Kopf erhöhen** (alle Vorkommen von `DynSEAD vX.Y`).
-2. `python tools/miz_tool.py embed mission/Dynamic_Script.miz src/DynSEAD.lua`
+2. `python tools/miz_tool.py embed mission/Dynamic_Script.miz src/DynSEAD.lua` **und** `… embed mission/Dynamic_Script_Syria.miz src/DynSEAD.lua` (beide Missionen nutzen dasselbe Skript)
    – bettet als `DynSEAD_vX.Y.lua` ein. Neuer Dateiname ist Pflicht: der DCS-Editor behält sonst u. U.
    eine alte Kopie gleichen Namens.
 3. Lua-Syntax prüfen (kein Lua-Interpreter installiert → mindestens Block/Klammer-Balance mit einem
