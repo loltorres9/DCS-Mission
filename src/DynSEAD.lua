@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.34 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.35 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -341,6 +341,11 @@ D.cfg = {
     urbanMax       = 10,
     tallHeight     = 12,           -- Objekte mindestens so hoch (m) zählen als Hochhaus ...
     tallRadius     = 300,          -- ... und sperren den Standort im Umkreis (m)
+    -- Straßennähe: Wälder lassen sich in DCS nicht abfragen, an Straßen und Feldwegen ist das Gelände meist offen.
+    -- SAM-Stellungen werden daher (im ersten Durchlauf) an eine Stelle roadDist m neben die nächste Straße verschoben.
+    nearRoad       = true,
+    roadDist       = {60, 250},    -- Abstand zur Straße (m): nicht direkt auf der Straße, aber nah dran
+    roadMaxShift   = 6000,         -- weiter als so viele m wird ein Standort für die Straßennähe nicht verschoben
   },
 
   fortress = {
@@ -979,6 +984,23 @@ function D.samSpotClear(p)
   return true
 end
 
+-- Punkt neben die nächste Straße verschieben (nil, wenn keine Straße innerhalb maxShift liegt)
+function D.nearRoad(p, maxShift)
+  local c = D.cfg.siting
+  if not c or not c.nearRoad then return p end
+  local ok, rx, ry = pcall(land.getClosestPointOnRoads, "roads", p.x, p.y)
+  if not ok or not rx then return nil end
+  local r = { x = rx, y = ry }
+  if dist(p, r) > (maxShift or c.roadMaxShift) then return nil end
+  for _ = 1, 8 do
+    local q = offset(r, math.random() * 2 * math.pi, randRange(c.roadDist))
+    local okr, qx, qy = pcall(land.getClosestPointOnRoads, "roads", q.x, q.y)
+    -- nicht auf einer anderen Straße landen
+    if okr and qx and dist(q, { x = qx, y = qy }) >= c.roadDist[1] * 0.8 then return q end
+  end
+  return nil
+end
+
 D.safeZones = {}   -- { x, y, r }: im ersten Durchlauf von findSpot (SAM/CAS/CAP) gemieden
 
 function D.findSpot(aos, avoid, sep, check)
@@ -989,7 +1011,11 @@ function D.findSpot(aos, avoid, sep, check)
     for _ = 1, 100 do
       local z = pickZone(aos)
       local p = randomPointInZone(z, 1000)
-      local safe = true
+      if pass == 1 and check == D.samSpotClear then
+        p = D.nearRoad(p)
+        if p and dist(p, z) > z.radius - 1000 then p = nil end
+      end
+      local safe = p ~= nil
       if pass == 1 then
         for _, sz in ipairs(D.safeZones) do
           if dist(p, sz) < sz.r then safe = false break end
@@ -1151,6 +1177,7 @@ function D.startRelocation(s)
   local dest
   for _ = 1, 40 do
     local q = offset(cur, math.random() * 2 * math.pi, randRange(cfg.distance))
+    q = D.nearRoad(q, 1500) or q
     if okGround(q) and farFrom(q, D.blueBases, D.cfg.minDistBlueBase)
        and dist(q, center) <= s.ao.radius and D.samSpotClear(q) then
       dest = q
@@ -3114,7 +3141,8 @@ function D.activateFortress(manual)
       for pass = 1, 2 do
         for _ = 1, 150 do
           local q = offset(c.p, math.random() * 2 * math.pi, randRange(layer.dist))
-          local ok = (pass == 1) and okGround(q) or (land.getSurfaceType(q) == land.SurfaceType.LAND)
+          if pass == 1 then q = D.nearRoad(q, 1500) end
+          local ok = q and ((pass == 1) and okGround(q) or (land.getSurfaceType(q) == land.SurfaceType.LAND))
           if ok and farFrom(q, placed, layer.sep * ((pass == 1) and 1 or 0.5)) and (pass ~= 1 or D.samSpotClear(q)) then p = q break end
         end
         if p then break end
@@ -4072,12 +4100,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.34 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.35 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.34 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.35 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
