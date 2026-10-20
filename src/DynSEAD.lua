@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.31 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.32 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -651,6 +651,33 @@ local function groupAliveCount(gname)
   return n
 end
 
+-- Bodengruppen so vollständig wie Editor-Gruppen anlegen (Gruppen-x/y, Startwegpunkt, Editor-Felder).
+-- Skript-Gruppen ohne diese Felder zeigt die F10-Karte nur mit dem ersten Fahrzeug, Editor-Gruppen mit allen.
+function D.addGround(country, data)
+  local u1 = data.units and data.units[1]
+  if u1 then
+    data.x = data.x or u1.x
+    data.y = data.y or u1.y
+    if not data.route then
+      data.route = { points = { { x = u1.x, y = u1.y, alt = land.getHeight({ x = u1.x, y = u1.y }), alt_type = "BARO",
+        type = "Turning Point", action = "Off Road", speed = 0, ETA = 0, ETA_locked = true, speed_locked = true,
+        formation_template = "", task = { id = "ComboTask", params = { tasks = {} } } } } }
+    end
+  end
+  if data.visible == nil then data.visible = false end
+  if data.hidden == nil then data.hidden = false end
+  if data.hiddenOnMFD == nil then data.hiddenOnMFD = false end
+  if data.hiddenOnPlanner == nil then data.hiddenOnPlanner = data.hidden end
+  if data.uncontrollable == nil then data.uncontrollable = false end
+  if data.lateActivation == nil then data.lateActivation = false end
+  data.start_time = data.start_time or 0
+  data.tasks = data.tasks or {}
+  for _, u in ipairs(data.units or {}) do
+    if u.transportable == nil then u.transportable = { randomTransportable = false } end
+  end
+  return coalition.addGroup(country, Group.Category.GROUND, data)
+end
+
 local function destroyGroup(gname)
   local g = Group.getByName(gname)
   if g and g:isExist() then g:destroy() end
@@ -1052,8 +1079,7 @@ function D.createSam(ao, key, p, forceMode)
   local def = D.samTypes[key]
   local gname = nextId("SAM-" .. key)
   local units, crit = buildSamUnits(def, p, gname)
-  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
+  D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
 
   local now = timer.getTime()
   local site = {
@@ -1070,7 +1096,7 @@ function D.createSam(ao, key, p, forceMode)
   if pd and pd.types[key] and math.random() < pd.chance then
     local pp = offset(p, math.random() * 2 * math.pi, pd.dist)
     site.pdGroup = gname .. "-PD"
-    coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND, {
+    D.addGround(D.cfg.redCountry, {
       name = site.pdGroup, task = "Ground Nothing", hidden = D.hideOnMap(),
       units = { { name = site.pdGroup .. "-1", type = pd.unit, x = pp.x, y = pp.y,
                   heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false } } })
@@ -1596,8 +1622,7 @@ function D.spawnManpadsZones(ao)
       end
 
       if #units > 0 then
-        coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-          { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
+        D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
         ao.manpads[#ao.manpads + 1] = { group = gname, center = c }
       end
     end
@@ -1780,8 +1805,7 @@ function D.spawnCAS(manual)
       heading = hdg, skill = D.cfg.skill, playerCanDrive = false }
   end
 
-  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = route })
+  D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = route })
 
   D.casTasks[#D.casTasks + 1] = { group = gname, name = tpl.name, initial = #units, convoy = isConvoy, ao = ao,
     manpads = hasManpads }
@@ -2209,8 +2233,7 @@ function D.spawnConvoy(manual)
     return { x = p.x, y = p.y, type = "Turning Point", action = "On Road", speed = cfg.speed,
              speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
   end
-  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = { points = { wp(sp), wp(ep) } } })
+  D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = { points = { wp(sp), wp(ep) } } })
 
   local alive = groupAliveCount(gname)
   if alive < n then
@@ -2350,8 +2373,7 @@ function D.spawnDeepStrike(manual)
     units[#units + 1] = { name = gname .. "-" .. i, type = typ, x = pos.x, y = pos.y,
       heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false }
   end
-  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
+  D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
 
   tg.used = true
   local t = { name = tg.name, obj = objName, def = gname, p = p, mark = nil }
@@ -2772,8 +2794,7 @@ function D.spawnTicWave(t)
     return { x = p.x, y = p.y, type = "Turning Point", action = "Off Road", speed = cfg.enemySpeed,
              speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
   end
-  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = { points = { wp(sp), wp(offset(t.p, hdg + math.pi, 150)) } } })
+  D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units, route = { points = { wp(sp), wp(offset(t.p, hdg + math.pi, 150)) } } })
   local alive = groupAliveCount(gname)
   if alive < #tpl then
     reportError("TIC", string.format("only %d of %d enemy units spawned – check type names in D.cfg.tic.waveTemplates", alive, #tpl))
@@ -2808,7 +2829,7 @@ function D.spawnTic(manual)
     units[i] = { name = gname .. "-" .. i, type = typ, x = u.x, y = u.y, heading = math.random() * 2 * math.pi,
                  skill = "High", playerCanDrive = false }
   end
-  coalition.addGroup(D.cfg.blueCountry, Group.Category.GROUND, { name = gname, task = "Ground Nothing", units = units })
+  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", units = units })
   local alive = groupAliveCount(gname)
   if alive < #cfg.friendlies then
     reportError("TIC", string.format("only %d of %d friendly units spawned – check type names in D.cfg.tic.friendlies", alive, #cfg.friendlies))
@@ -2916,7 +2937,7 @@ function D.spawnBattleSide(bt, blue, center, axisSign)
                speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
     end
     local d = offset(dest, bt.axis + math.pi / 2, (g - (nGroups + 1) / 2) * (cfg.groupSize * cfg.lineSpacing / 2 + 60))
-    coalition.addGroup(country, Group.Category.GROUND, { name = gname, task = "Ground Nothing",
+    D.addGround(country, { name = gname, task = "Ground Nothing",
       hidden = (not blue) and D.hideOnMap() or nil, units = units, route = { points = { wp(gc), wp(d) } } })
     local alive = groupAliveCount(gname)
     if alive < #units then
@@ -3124,8 +3145,7 @@ function D.activateFortress(manual)
       units[#units + 1] = { name = gname .. "-" .. i, type = typ, x = pos.x, y = pos.y,
         heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false }
     end
-    coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-      { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
+    D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
     groups[#groups + 1] = gname
   end
   if #cfg.ewr > 0 then ring(cfg.ewr, 1500, 5000, "FORT-EWR") end
@@ -3201,8 +3221,7 @@ function D.spawnGarrison(ao)
     units[#units + 1] = { name = gname .. "-" .. i, type = t, x = pos.x, y = pos.y,
       heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false }
   end
-  coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
-    { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
+  D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
   ao.garrison = gname
   ao.garrisonInit = #units
   ao.garrisonDone = false
@@ -4054,12 +4073,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.31 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.32 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.31 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.32 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
