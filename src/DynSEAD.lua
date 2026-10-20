@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.33 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.34 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -652,7 +652,6 @@ local function groupAliveCount(gname)
 end
 
 -- Bodengruppen so vollständig wie Editor-Gruppen anlegen (Gruppen-x/y, Startwegpunkt, Editor-Felder).
--- Skript-Gruppen ohne diese Felder zeigt die F10-Karte nur mit dem ersten Fahrzeug, Editor-Gruppen mit allen.
 function D.addGround(country, data)
   local u1 = data.units and data.units[1]
   if u1 then
@@ -3893,102 +3892,6 @@ function D.start()
   end
 end
 
--- DEBUG-Test: Warum zeigt die F10-Karte bei Skript-Gruppen nur das erste Fahrzeug, bei Editor-Gruppen alle?
--- Spawnt drei SA-6-Gruppen 3 km nördlich des ersten Spielers:
---  A) wie das Skript sonst (D.addGround), B) Feld für Feld wie eine Editor-Gruppe (groupId/unitId, coldAtStart, spans, kein task),
---  C) 1:1-Kopie der ersten Boden-Gruppe aus dem Missionseditor (env.mission), nur Name/IDs/Position neu.
-D.dbgGroupTest = nil
-local function deepCopy(t)
-  if type(t) ~= "table" then return t end
-  local c = {}
-  for k, v in pairs(t) do c[k] = deepCopy(v) end
-  return c
-end
-
-function D.debugGroupTest()
-  if D.dbgGroupTest then msg("GROUP TEST: Test groups already exist. Remove them first.") return end
-  local base
-  for _, pu in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
-    if pu and pu:isExist() then base = toV2(pu:getPoint()) break end
-  end
-  if not base then msg("GROUP TEST: No player found.") return end
-  D.dbgGroupTest = {}
-  local types = { "Kub 1S91 str", "Kub 2P25 ln", "Kub 2P25 ln", "Kub 2P25 ln", "Kub 2P25 ln" }
-  local function unitsAt(c, prefix)
-    local u = {}
-    for i, t in ipairs(types) do
-      local a = (i - 1) * 2 * math.pi / #types
-      local r = (i == 1) and 0 or 120
-      u[i] = { name = prefix .. "-" .. i, type = t, x = c.x + r * math.cos(a), y = c.y + r * math.sin(a),
-               heading = 0, skill = "High", playerCanDrive = false }
-    end
-    return u
-  end
-  local lines = {}
-  local function report(tag, gname, ok, err)
-    local g = Group.getByName(gname)
-    local n = (g and g:isExist()) and #(g:getUnits() or {}) or 0
-    if n > 0 then D.dbgGroupTest[#D.dbgGroupTest + 1] = gname end
-    lines[#lines + 1] = string.format("%s) %s: %d units%s", tag, gname, n, ok and "" or (" – error: " .. tostring(err)))
-  end
-
-  -- A: wie bisher
-  local cA = { x = base.x + 3000, y = base.y - 600 }
-  local okA, eA = pcall(D.addGround, D.cfg.redCountry, { name = "GRPTEST-A", task = "Ground Nothing", hidden = false,
-    units = unitsAt(cA, "GRPTEST-A") })
-  report("A", "GRPTEST-A", okA, eA)
-
-  -- B: Editor-Felder exakt
-  local cB = { x = base.x + 3000, y = base.y }
-  D.dbgGid = (D.dbgGid or 90000) + 1
-  local uB = unitsAt(cB, "GRPTEST-B")
-  for i, u in ipairs(uB) do u.coldAtStart = false; u.unitId = D.dbgGid * 10 + i end
-  local okB, eB = pcall(coalition.addGroup, D.cfg.redCountry, Group.Category.GROUND, {
-    visible = false, uncontrollable = false, hidden = false, groupId = D.dbgGid, name = "GRPTEST-B",
-    x = cB.x, y = cB.y, start_time = 0, units = uB,
-    route = { spans = {}, points = { { alt = land.getHeight(cB), type = "Turning Point", ETA = 0, alt_type = "BARO",
-      formation_template = "", x = cB.x, y = cB.y, ETA_locked = true, speed = 5.5555555555556, action = "Off Road",
-      speed_locked = true } } } })
-  report("B", "GRPTEST-B", okB, eB)
-
-  -- C: Kopie einer Editor-Gruppe
-  local src
-  pcall(function()
-    for _, side in pairs(env.mission.coalition) do
-      for _, c in pairs(side.country or {}) do
-        for _, g in pairs((c.vehicle and c.vehicle.group) or {}) do
-          if g.units and #g.units > 1 then src = src or g end
-        end
-      end
-    end
-  end)
-  if src then
-    local g = deepCopy(src)
-    local cC = { x = base.x + 3000, y = base.y + 600 }
-    local dx, dy = cC.x - g.x, cC.y - g.y
-    D.dbgGid = D.dbgGid + 1
-    g.name, g.groupId, g.x, g.y = "GRPTEST-C", D.dbgGid, cC.x, cC.y
-    for i, u in ipairs(g.units) do
-      u.name, u.unitId, u.x, u.y = "GRPTEST-C-" .. i, D.dbgGid * 10 + i, u.x + dx, u.y + dy
-    end
-    for _, p in ipairs((g.route and g.route.points) or {}) do p.x, p.y = p.x + dx, p.y + dy end
-    local okC, eC = pcall(coalition.addGroup, D.cfg.redCountry, Group.Category.GROUND, g)
-    report("C", "GRPTEST-C", okC, eC)
-  else
-    lines[#lines + 1] = "C) skipped – no editor ground group with several units in this mission"
-  end
-  local text = "GROUP TEST (3 km north of you, west to east: A, B, C):\n" .. table.concat(lines, "\n") ..
-    "\nCheck on the F10 map which groups show every vehicle."
-  env.info("DynSEAD " .. text:gsub("\n", " | "))
-  msg(text)
-end
-
-function D.debugGroupTestRemove()
-  for _, gn in ipairs(D.dbgGroupTest or {}) do destroyGroup(gn) end
-  D.dbgGroupTest = nil
-  msg("GROUP TEST: removed.")
-end
-
 function D.buildMenu()
   -- DCS zeigt pro Menüebene nur etwa 10 Einträge: alles in Untermenüs (je höchstens 9 Einträge) gruppieren
   local side = D.cfg.blueSide
@@ -4065,8 +3968,6 @@ function D.buildMenu()
     cmd(dbg, "Show all units on map (on/off)", D.debugMapToggle)
     if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
-    cmd(dbg, "Map group test: spawn A/B/C", D.debugGroupTest)
-    cmd(dbg, "Map group test: remove", D.debugGroupTestRemove)
   end
 end
 
@@ -4171,12 +4072,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.33 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.34 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.33 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.34 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
