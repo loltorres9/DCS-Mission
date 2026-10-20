@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.24 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.25 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -67,7 +67,10 @@ D.cfg = {
   },
 
   sam = {
-    maxActive         = 5,         -- SAM-Stellungen gleichzeitig (gesamt, alle AOs)
+    maxActive         = 12,        -- SAM-Stellungen gleichzeitig (gesamt, alle AOs)
+    spawnAll          = true,      -- alle SAM-Stellungen einer AO erscheinen sofort beim Aktivieren (nicht nacheinander)
+    showIntel         = false,     -- false = keine SAM-Standortinfos (keine Kartenmarker, keine ELINT-Meldungen, keine Peilungen im SITREP)
+    softKill          = 0.6,       -- SAM-Einheit wird zerstört, sobald ihre Lebenspunkte unter diesen Anteil fallen (Bordkanone hilft sonst kaum); 0 = aus
     respawnDelay      = {120, 300},
     minSeparation     = 12000,
     intelError        = 7000,      -- Start-Ungenauigkeit (m), wird per ELINT kleiner
@@ -1018,7 +1021,7 @@ function D.setRadar(site, on)
     on and AI.Option.Ground.val.ALARM_STATE.RED or AI.Option.Ground.val.ALARM_STATE.GREEN)
   local wasOn = site.radarOn
   site.radarOn = on
-  if on and not wasOn and site.ao then
+  if on and not wasOn and site.ao and D.cfg.sam.showIntel then
     local now = timer.getTime()
     if site.announceBack then
       site.announceBack = nil
@@ -1037,7 +1040,7 @@ function D.updateIntelPos(s)
 end
 
 function D.updateMark(s)
-  if not D.cfg.mapMarks then return end
+  if not D.cfg.mapMarks or not D.cfg.sam.showIntel then return end
   if s.mark then trigger.action.removeMark(s.mark) end
   s.mark = newMarkId()
   local quality = (s.err <= D.cfg.elint.locatedAt) and ("LOCATED ±" .. fmtDist(s.err)) or ("±" .. fmtDist(s.err))
@@ -1115,7 +1118,7 @@ function D.createSam(ao, key, p, errMax, quiet, forceMode)
   env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
     key, D.siting.tested, D.siting.scenery, D.siting.urban, D.siting.slope, D.siting.horizon, D.siting.zone,
     D.siting.apiFailed and " (scenery search unavailable)" or ""))
-  if not quiet then
+  if not quiet and D.cfg.sam.showIntel then
     D.say({ "all_players", "new_threat", tSam(key), tBE(site.intelPos), tDist(site.err), "area", tPlace(ao.name) })
     msg(string.format("INTEL [%s]: New threat reported – %s.\nApprox. position (±%s): %s",
       ao.name, def.name, fmtDist(site.err), D.fmtPos(site.intelPos)))
@@ -1750,7 +1753,7 @@ end
 
 function D.elint()
   local cfg = D.cfg.elint
-  if not cfg.enabled then return end
+  if not cfg.enabled or not D.cfg.sam.showIntel then return end
 
   local sensors = {}
   local aw = D.awacsUnit()
@@ -3641,6 +3644,7 @@ end
 -- BERICHTE
 -------------------------------------------------------------------------------
 function D.voicePicture()
+  if not D.cfg.sam.showIntel then return end
   if not D.voiceOK then msg("Overlord voice not available (voice files missing, see dcs.log).") return end
   if #D.sites == 0 then D.say({ "no_sites" }) return end
   local t = { "threat_picture", tNum(#D.sites), "sites" }
@@ -3652,11 +3656,15 @@ end
 
 function D.reportSEAD()
   if #D.sites == 0 then msg("SEAD: No known SAM sites active.") return end
-  local lines = { "SEAD SITREP:" }
+  local lines = { D.cfg.sam.showIntel and "SEAD SITREP:" or "SEAD SITREP (locations unknown – find them yourself):" }
   for i, s in ipairs(D.sites) do
-    local quality = (s.err <= D.cfg.elint.locatedAt) and ("LOCATED ±" .. fmtDist(s.err)) or ("±" .. fmtDist(s.err))
-    lines[#lines + 1] = string.format("%d) [%s] %s – %s – %s\n   %s", i, s.ao.name, s.def.name,
-      s.radarOn and "radar ACTIVE" or "radar silent", quality, D.fmtPos(s.intelPos))
+    if D.cfg.sam.showIntel then
+      local quality = (s.err <= D.cfg.elint.locatedAt) and ("LOCATED ±" .. fmtDist(s.err)) or ("±" .. fmtDist(s.err))
+      lines[#lines + 1] = string.format("%d) [%s] %s – %s – %s\n   %s", i, s.ao.name, s.def.name,
+        s.radarOn and "radar ACTIVE" or "radar silent", quality, D.fmtPos(s.intelPos))
+    else
+      lines[#lines + 1] = string.format("%d) [%s] %s", i, s.ao.name, s.def.name)
+    end
   end
   lines[#lines + 1] = string.format("Neutralized so far: %d", D.stats.sam)
   msg(table.concat(lines, "\n"))
@@ -3720,6 +3728,26 @@ function D.update()
     end
   end
 
+  -- Soft-Kill: stark beschädigte SAM-Einheiten gelten als zerstört
+  local sk = D.cfg.sam.softKill
+  if sk and sk > 0 then
+    for _, s in ipairs(D.sites) do
+      for _, gn in ipairs({ s.group, s.pdGroup }) do
+        local g = gn and Group.getByName(gn)
+        if g and g:isExist() then
+          for _, u in ipairs(g:getUnits() or {}) do
+            local ok, life, life0 = pcall(function() return u:getLife(), u:getLife0() end)
+            if ok and life and life0 and life0 > 0 and life > 0 and life / life0 < sk then
+              local p = u:getPoint()
+              pcall(function() u:destroy() end)
+              pcall(trigger.action.explosion, p, 50)
+            end
+          end
+        end
+      end
+    end
+  end
+
   -- AWACS / ELINT
   D.checkAwacs(now)
   D.checkTankers(now)
@@ -3760,7 +3788,11 @@ function D.update()
 
   -- Nachschub
   if now >= D.nextSam then
-    D.nextSam = D.spawnSam() and (now + 5) or (now + 30)
+    local ok = D.spawnSam()
+    if ok and D.cfg.sam.spawnAll then
+      for _ = 1, 20 do if not D.spawnSam() then break end end
+    end
+    D.nextSam = ok and (now + 5) or (now + 30)
   end
   if D.cfg.cas.autoSpawn and now >= D.nextCas then
     D.nextCas = D.spawnCAS(false) and (now + randRange(D.cfg.cas.interval)) or (now + 60)
@@ -4009,12 +4041,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.24 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.25 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.24 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.25 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 

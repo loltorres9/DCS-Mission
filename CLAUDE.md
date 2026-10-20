@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.24). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.24 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.25). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.25 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -49,6 +49,9 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
   der Platz blau; `D.createSam(ao, key, p, …)` baut eine Stellung; Hauptbasis-Stellungen zählen nicht gegen `sam.maxActive`; F10 DEBUG > „Activate enemy main base now“), `tic` (Troops in Contact für A-10C/AH-64D, bewusst abseits der SAM-Zonen: Editor-Trigger-Zone `TIC*` oder automatisch 10–45 km von einer blauen Basis,
   außerhalb aller aktiven AOs und ≥ 50 km von SAMs; `D.safeZones` hält neue SAMs fern; blaue Gruppe, 3 anrückende leichte rote Wellen, Rauch/IR-Strobe
   automatisch ab 12 km oder per Menü, JTAC-Menü mit Lage, Rotrauch auf Feind, Laser Code 1688).
+- SAM-Standortinfos sind aus (`sam.showIntel = false`): keine Kartenmarker, keine ELINT-/Neubedrohungs-Meldungen mit Position, SITREP ohne Peilung; die Spieler müssen die SAMs selbst finden.
+  `true` schaltet das ELINT-System wieder ein. `sam.spawnAll = true`: alle SAM-Stellungen einer AO erscheinen sofort beim Aktivieren (`maxActive` = 12 Gesamtlimit).
+  `sam.softKill = 0.6`: SAM-/PD-Einheiten werden zerstört, sobald ihre Lebenspunkte unter 60 % fallen (Kanone gegen SA-11-Werfer wirkte nicht); ungetestet im Spiel.
 - Testhilfe: `cfg.debugShowAll` (standardmäßig aus) bzw. F10 „DEBUG: Show all units on map“ zeichnet alle Gruppen beider Seiten
   (ohne Spielergruppen) als Marker auf die F10-Karte, Aktualisierung alle `debugMapInterval` s.
 - F10-Menü: DCS zeigt pro Ebene nur etwa 10 Einträge, daher sind alle Befehle in Untermenüs gruppiert (Info, CAS, A2A, Ship Strike,
@@ -104,14 +107,14 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
-8. **Ship Strike (v4.24)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+8. **Ship Strike (v4.25)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
    (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
    das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
-9. **Nebenaufträge (v4.24)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
+9. **Nebenaufträge (v4.25)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
    (Hauptbasis `RPC_5N62V`/`RLS_19J6`/`S-200_Launcher`/`S-300PS …`/`1L13 EWR`/`55G6 EWR`, Bomber `Tu-95MS`/`Tu-160`, `REACTION_ON_THREAT`, Konvoi, Deep-Strike-Statik `.Command Center`/`Warehouse`/`Tank`, TIC-Einheiten), `Spot.createInfraRed`/`createLaser`, Platzhalter-Koordinaten
    in `D.cfg.deepStrike.targets`. Logik wurde nur gegen einen DCS-Mock (lupa) getestet. Keine Sprachbausteine dafür.
-10. **Standortprüfung (v4.24)** ungetestet im Spiel: ob `world.searchObjects(Object.Category.SCENERY, …)` Bäume liefert (sonst nur Gebäude), Wirkung über die Zähler „siting checks“ in `dcs.log` prüfen.
-11. **Vorwärts-FARP (v4.24)** ungetestet im Spiel (Test-Ergebnisse siehe unten): Ein gelandeter Hubschrauber löst im gruppenbezogenen F10-Menü „Logistics“ > „Deploy FARP here“ aus; das Skript baut
+10. **Standortprüfung (v4.25)** ungetestet im Spiel: ob `world.searchObjects(Object.Category.SCENERY, …)` Bäume liefert (sonst nur Gebäude), Wirkung über die Zähler „siting checks“ in `dcs.log` prüfen.
+11. **Vorwärts-FARP (v4.25)** ungetestet im Spiel (Test-Ergebnisse siehe unten): Ein gelandeter Hubschrauber löst im gruppenbezogenen F10-Menü „Logistics“ > „Deploy FARP here“ aus; das Skript baut
     `FARP` + Tankdepot/Munition/Zelt 60 m nördlich und erzeugt `slotsPerFarp` (4) Slot-Gruppen `FARP-n-S1…` (Skill `"Player"`, Land USA, Start `TakeOffGround`), die in der Slot-Liste erscheinen. Jeder Einstieg
     (`S_EVENT_BIRTH`) zählt den Vorrat herunter; erneute Lieferung am selben FARP (Radius 250 m, 300 s Abstand) füllt auf; „Dismantle nearest FARP“ baut ab; Kartenmarker zeigt die Restslots.
     Bewaffnung: aus einer AH-64D-Vorlage der Mission (`env.mission`), falls dort Pylone belegt sind, sonst `cfg.farp.payloads` (aktuell leer = unbewaffnet, CLSIDs fehlen noch).
