@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.35 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.36 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -315,6 +315,7 @@ D.cfg = {
     perSide        = 30,           -- Fahrzeuge je Seite (in Gruppen zu je groupSize)
     groupSize      = 6,
     baseDistance   = {4000, 12000}, -- Schlachtfeld-Mitte so weit vom feindlichen Flugplatz (m)
+    nearestBases   = 3,            -- ohne aktive AO: unter den X feindlichen Flugplätzen wählen, die einer blauen Basis am nächsten sind
     gap            = {2200, 3000}, -- Abstand der beiden Linien zu Beginn (m)
     lineSpacing    = 45,           -- Abstand der Fahrzeuge in der Linie (m)
     speed          = 7,            -- m/s Vormarsch
@@ -2987,7 +2988,21 @@ function D.spawnBattle(manual)
     if manual then msg("BATTLE: A battle is already in progress.") end
     return false
   end
-  local bases = redAirbases()
+  -- Ort: bevorzugt eine aktive AO (Ziel-Flugplatz), sonst die feindlichen Flugplätze, die einer blauen Basis am nächsten sind
+  local bases = {}
+  for _, ao in ipairs(D.aos) do
+    if ao.state == "active" and not ao.fortress then bases[#bases + 1] = { x = ao.x, y = ao.y, name = ao.name } end
+  end
+  if #bases == 0 then
+    D.refreshBlueBases()
+    local all = redAirbases()
+    for _, b in ipairs(all) do
+      b.d = math.huge
+      for _, bb in ipairs(D.blueBases) do b.d = math.min(b.d, dist(b, bb)) end
+    end
+    table.sort(all, function(a, b) return a.d < b.d end)
+    for i = 1, math.min(cfg.nearestBases, #all) do bases[#bases + 1] = all[i] end
+  end
   if #bases == 0 then
     if manual then msg("BATTLE: No enemy airfield available.") end
     return false
@@ -4100,12 +4115,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.35 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.36 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.35 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.36 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
