@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.36 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.37 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -312,15 +312,19 @@ D.cfg = {
     autoSpawn      = false,
     autoInterval   = {3000, 6000},
     firstDelay     = 2400,
-    perSide        = 30,           -- Fahrzeuge je Seite (in Gruppen zu je groupSize)
+    -- Kräfteverhältnis: Rot ist ohne Spieler überlegen, die Verbündeten brauchen CAS (Test v4.29: Blau mit Abrams gewann haushoch)
+    bluePerSide    = 30,           -- Fahrzeuge Blau (in Gruppen zu je groupSize)
+    redPerSide     = 36,           -- Fahrzeuge Rot
+    blueSkill      = "Average",
+    redSkill       = "Excellent",
     groupSize      = 6,
     baseDistance   = {4000, 12000}, -- Schlachtfeld-Mitte so weit vom feindlichen Flugplatz (m)
     nearestBases   = 3,            -- ohne aktive AO: unter den X feindlichen Flugplätzen wählen, die einer blauen Basis am nächsten sind
     gap            = {2200, 3000}, -- Abstand der beiden Linien zu Beginn (m)
     lineSpacing    = 45,           -- Abstand der Fahrzeuge in der Linie (m)
     speed          = 7,            -- m/s Vormarsch
-    blueUnits      = { "M-1 Abrams", "M-1 Abrams", "M-2 Bradley", "M-2 Bradley", "M-113", "M1043 HMMWV Armament" },
-    redUnits       = { "T-72B", "T-72B", "BMP-2", "BMP-2", "BTR-80", "BRDM-2" },
+    blueUnits      = { "M-60", "M-2 Bradley", "M-2 Bradley", "M-113", "M-113", "M1043 HMMWV Armament" },   -- je Gruppe nur ein älterer Panzer
+    redUnits       = { "T-72B3", "T-72B3", "BMP-3", "BMP-2", "BTR-82A", "ZSU-23-4 Shilka" },          -- Shilka: Achtung für A-10/AH-64
     endPercent     = 85,           -- Schlacht endet, wenn eine Seite so viel ihrer Stärke verloren hat
     maxTime        = 2700,         -- s, danach gilt die Schlacht als unentschieden
     cleanupAfter   = 600,
@@ -2942,7 +2946,7 @@ function D.spawnBattleSide(bt, blue, center, axisSign)
   local cfg = D.cfg.battle
   local types = blue and cfg.blueUnits or cfg.redUnits
   local country = blue and D.cfg.blueCountry or D.cfg.redCountry
-  local nGroups = math.max(1, math.floor(cfg.perSide / cfg.groupSize))
+  local nGroups = math.max(1, math.floor((blue and cfg.bluePerSide or cfg.redPerSide) / cfg.groupSize))
   local linePos = offset(center, bt.axis, axisSign * bt.gap / 2)
   local hdg = bt.axis + (axisSign > 0 and math.pi or 0)   -- Blick zum Gegner
   local dest = offset(center, bt.axis, -axisSign * 150)   -- bis knapp hinter die Mitte
@@ -2957,7 +2961,7 @@ function D.spawnBattleSide(bt, blue, center, axisSign)
       local q = offset(offset(gc, bt.axis + math.pi / 2, (col - 1) * cfg.lineSpacing), bt.axis, -axisSign * row * 40)
       if not okGround(q) then q = jitter(gc, 200) end
       units[#units + 1] = { name = gname .. "-" .. i, type = typ, x = q.x, y = q.y, heading = hdg,
-                            skill = D.cfg.skill, playerCanDrive = false }
+                            skill = blue and cfg.blueSkill or cfg.redSkill, playerCanDrive = false }
     end
     local function wp(p)
       return { x = p.x, y = p.y, type = "Turning Point", action = "Off Road", speed = cfg.speed,
@@ -4115,12 +4119,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.36 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.37 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.36 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.37 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
