@@ -12,12 +12,12 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.39). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.39 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten). Briefing (englisch) steht im Dictionary: `DictKey_descriptionText_1` (Lage), `DictKey_descriptionBlueTask_3` (Auftrag, Support, Lagebild, SAM-Gefechtsordnung, Nebenaufträge, F10-Menü) – bei Änderungen an SAM-Typen, Menü oder Intel mitpflegen |
-| `mission/Dynamic_Script_Syria.miz` | Syrien-Mission (gleiches Skript, Profil `D.cfg.maps.Syria`): Startbasis Incirlik (Airport-ID 16) mit 6 Dynamic-Spawn-Vorlagen (F-16C, F/A-18C, A-10C II, AJS-37, AH-64D, CH-47F als Transporter für FARP), Zypern freundlich, F10-Ansicht „All“ erzwungen, Briefing angepasst, keine Sprachdateien. Vorlagen an weiteren Plätzen fehlen noch (Flugplatz-IDs/Koordinaten aus „Write airfield list to dcs.log“ nötig) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.40). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.40 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten). Briefing (englisch) steht im Dictionary: `DictKey_descriptionText_1` (Lage), `DictKey_descriptionBlueTask_3` (Auftrag, Support, Lagebild, SAM-Gefechtsordnung, Nebenaufträge, F10-Menü) – bei Änderungen an SAM-Typen, Menü oder Intel mitpflegen |
+| `mission/Dynamic_Script_Syria.miz` | Syrien-Mission (gleiches Skript, Profil `D.cfg.maps.Syria`): Vorlagen für F-16C, F/A-18C, A-10C II, AJS-37, AH-64D, CH-47F (Transporter für FARP) an allen 82 echten Flugplätzen (492 Gruppen; Incirlik vom Nutzer mit Parkplätzen, Rest per `templates --keep`, ohne Parkposition → einmal im Editor speichern). Freundlich: Türkei (Incirlik u. a.), Zypern, Jordanien; Ziele: Syrien, Libanon, Israel, West-Irak (52). F10-Ansicht „All“ erzwungen, Briefing angepasst, keine Sprachdateien |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
-| `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
+| `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau); `SYRIA_AIRFIELDS` (ID, Name, DCS x/y aus dem Spiel-Log). `miz_tool templates` kann beide Karten |
 | `voice/make_overlord_voice.py` | erzeugt beim Nutzer per Edge-TTS (neuronale Stimme, `pip install edge-tts`, ffmpeg) die 111 WAV-Bausteine `ov_*.wav` + ZIP; Sandbox hat kein Internet |
 | `voice/make_overlord_voice_elevenlabs.py` | wie oben, aber mit ElevenLabs (bessere Stimme; Key nur als Umgebungsvariable `ELEVENLABS_API_KEY`); bevorzugt |
 | `voice/make_overlord_voice.ps1` | alte Variante mit Windows-Sprachausgabe (SAPI), nicht mehr bevorzugt |
@@ -34,10 +34,12 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 **Nie Dateien löschen, bevor die neue Version erfolgreich geschrieben ist** (einmal ist dadurch Arbeit verloren gegangen).
 
 ## Aufbau von `src/DynSEAD.lua`
-- Mehrere Karten (v4.39): `D.cfg.maps[theatre]` wird nach `env.mission.theatre` gewählt (`D.theatre`, `D.map`): `homeBases` (beim Start blau), `friendlyAreas` (Lat/Lon-Rechtecke, alle Flugplätze darin blau,
-  kein Ziel), `exclude`, `deepStrike` (ersetzt `cfg.deepStrike.targets`). Caucasus: leer (Startbasis aus dem Editor). Syria: Startbasis Incirlik, Zypern freundlich, Eroberung Richtung Süden,
+- Mehrere Karten (v4.40): `D.cfg.maps[theatre]` wird nach `env.mission.theatre` gewählt (`D.theatre`, `D.map`): `homeBases` (beim Start blau), `friendlyAreas` (Lat/Lon-Rechtecke, alle Flugplätze darin blau,
+  kein Ziel), `exclude`, `deepStrike` (ersetzt `cfg.deepStrike.targets`). Caucasus: leer (Startbasis aus dem Editor). Syria: Startbasis Incirlik, Türkei/Zypern/Jordanien freundlich, Eroberung Richtung Süden,
   Deep-Strike-Platzhalterziele (Damaskus, Homs, Palmyra, Deir ez-Zor, Hama). Syrien-Mission (`mission/Syria_*.miz`) folgt, sobald der Nutzer eine leere Syrien-Mission mit Vorlagen an Incirlik liefert;
-  F10 DEBUG > „Write airfield list to dcs.log“ schreibt alle Flugplätze mit ID und Koordinaten (Zeilen „DynSEAD AIRFIELD“) – Grundlage für die Spawn-Vorlagen.
+  F10 DEBUG > „Write airfield list to dcs.log“ schreibt alle Flugplätze mit ID und Koordinaten (Zeilen „DynSEAD AIRFIELD“) – Grundlage für `SYRIA_AIRFIELDS` in `tools/geo.py`.
+  Syria meldet ~140 Hubschrauber-Landeplätze (HS02, HMed01, H_med_orig_03, HOil01 …) als AIRDROME: `D.map.ignore` (Lua-Muster) bzw. `D.ignoredBase(ab)` blendet sie überall aus (Ziele, blaue Basen, Konvoi/Bomber/Battle, Schiffe).
+  `friendly` = Türkei- und Jordanien-Plätze per Namen, Zypern per Rechteck.
 - `D.cfg` oben: `mode` ("airbases"/"zones"), `campaign` (activeTargets=2, samPerAO, casPerAO, Garnison, `aoSeparation` = Mindestabstand gleichzeitig aktiver AOs, damit sich die Kreise nicht überlappen; sonst wird gewartet),
   `sam` (maxActive=5, Typ-Pool, `engageRange`, `modesByType`, `armEvasion`, `relocate`, `pointDefense`),
   `awacs` (Overlord E-3A 251 AM, immortal/invisible), `voice`, `tankers` (Texaco KC-135 Boom 255 AM 51Y,
@@ -55,7 +57,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
   außerhalb aller aktiven AOs und ≥ 50 km von SAMs; `D.safeZones` hält neue SAMs fern; blaue Gruppe, 3 anrückende leichte rote Wellen, Rauch/IR-Strobe
   automatisch ab 12 km oder per Menü, JTAC-Menü mit Lage, Rotrauch auf Feind, Laser Code 1688).
 - Frontline Battle (`cfg.battle`, F10 Side Missions > Frontline Battle): KI-gegen-KI-Panzerschlacht, Blau 30 Fahrzeuge (M-60, Bradley, M-113, HMMWV; Skill Average), Rot 36 (T-72B3, BMP-3/2, BTR-82A, Shilka; Skill Excellent), Gruppen à 6 – Rot ist bewusst überlegen (erster Test: Blau mit Abrams gewann haushoch), Mitte 4–12 km vom Ziel-Flugplatz einer aktiven AO (ohne aktive AO: einer der 3 feindlichen Flugplätze, die einer blauen Basis am nächsten sind),
-  Linien 2,2–3 km auseinander. Beide Seiten warten mit ROE WEAPON_HOLD, bis ein Spieler ≤ `activateRange` (20 km) an der Mitte ist, dann ROE OPEN_FIRE und Vormarsch (v4.39).
+  Linien 2,2–3 km auseinander. Beide Seiten warten mit ROE WEAPON_HOLD, bis ein Spieler ≤ `activateRange` (20 km) an der Mitte ist, dann ROE OPEN_FIRE und Vormarsch (v4.40).
   Solange ein Spieler in der Nähe ist, kommen je Seite bis zu `waves` (3) Verstärkungswellen à 3 Gruppen, sobald die Seite unter 40 % ihrer Grundstärke fällt (Abstand ≥ 180 s).
   Besiegt ist eine Seite erst, wenn ihre Wellen verbraucht sind und nur noch 15 % der Grundstärke übrig sind (Sieg zählt in `stats.battle`); 45 min nach Kampfbeginn unentschieden; ohne Spieler nach 2 h abgebaut.
   Kartenmarker „FRONTLINE BATTLE“, `autoSpawn` standardmäßig aus. Typnamen (`M-1 Abrams`, `M-113`, `BRDM-2` …) und Verhalten der KI im Spiel ungetestet.
@@ -76,7 +78,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 - SAM-/Radar-Standorte (`D.samSpotClear`, `cfg.siting`): nicht in Editor-Trigger-Zonen `NOSAM*`; Gelände: Hangneigung ≤ 6° (8 Richtungen auf 150 m) und Horizont (Berge ≥ 6° Erhebung
   in ≥ 3 von 8 Richtungen bei 1,5/3/5 km blockieren); Bebauung: nicht direkt neben Gebäuden (`world.searchObjects(SCENERY)` im Umkreis `sceneryRadius` = 150 m), nicht zwischen
   ≥ 10 Objekten im Umkreis 400 m und nicht neben Objekten ≥ 12 m Höhe (aus `getDesc().box`) im Umkreis 300 m. DCS hat keine Wald-Abfrage: Bäume werden nur erkannt, falls sie als Szenerie-Objekte geliefert werden; große Wälder sperrt man per `NOSAM`-Zone.
-  Straßennähe (v4.39, `siting.nearRoad`): da Wälder nicht abfragbar sind, verschiebt `D.nearRoad(p, maxShift)` SAM-Standorte 60–250 m neben die nächste Straße (`land.getClosestPointOnRoads`),
+  Straßennähe (v4.40, `siting.nearRoad`): da Wälder nicht abfragbar sind, verschiebt `D.nearRoad(p, maxShift)` SAM-Standorte 60–250 m neben die nächste Straße (`land.getClosestPointOnRoads`),
   im ersten Durchlauf von `D.findSpot` (max. 6 km Verschiebung), bei Hauptbasis-Schichten und Stellungswechseln (max. 1,5 km). Im Spiel bestätigt: deutlich weniger Waldstandorte.
   Die Prüfung gilt nur im ersten Durchlauf von `D.findSpot` (weich, blockiert nie), auch für Hauptbasis-Schichten und Stellungswechsel. `dcs.log` zeigt pro Stellung die Zähler
   „siting checks“ (Wirkung prüfbar).
@@ -101,6 +103,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 - Dynamic Spawn Templates: Gruppe mit `dynSpawnTemplate = true`, Start-Wegpunkt mit `airdromeId`, Unit-Typ muss
   der **spielbare** Typ sein (`F-16C_50`, nicht `F-16C bl.50`), Skill `"Player"`, und im Warehouse des Flugplatzes
   `airports[id].aircrafts.planes|helicopters[TYP].linkDynTempl = groupId`. Bestand muss > 0 sein.
+  Vorlagen sind fürs Spawnen nicht nötig: Dynamic Spawn erlaubt jeden Typ mit Lagerbestand > 0; die Vorlage legt nur Startzustand und Wegpunkte fest (fehlt sie, spawnt der Typ ohne Route).
   F-16-Vorlagen funktionieren („sieht besser aus“). Neue Vorlagen ohne Parkposition → einmal im Editor speichern.
 - Spielbare Typnamen: `F-16C_50`, `FA-18C_hornet`, `A-10C_2`, `AJS37`, `AH-64D_BLK_II`. Viggen nimmt nur B1–B9.
 
@@ -119,14 +122,14 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
-8. **Ship Strike (v4.39)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+8. **Ship Strike (v4.40)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
    (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
    das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
-9. **Nebenaufträge (v4.39)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
+9. **Nebenaufträge (v4.40)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
    (Hauptbasis `RPC_5N62V`/`RLS_19J6`/`S-200_Launcher`/`S-300PS …`/`1L13 EWR`/`55G6 EWR`, Bomber `Tu-95MS`/`Tu-160`, `REACTION_ON_THREAT`, Konvoi, Deep-Strike-Statik `.Command Center`/`Warehouse`/`Tank`, TIC-Einheiten), `Spot.createInfraRed`/`createLaser`, Platzhalter-Koordinaten
    in `D.cfg.deepStrike.targets`. Logik wurde nur gegen einen DCS-Mock (lupa) getestet. Keine Sprachbausteine dafür.
-10. **Standortprüfung (v4.39)** ungetestet im Spiel: ob `world.searchObjects(Object.Category.SCENERY, …)` Bäume liefert (sonst nur Gebäude), Wirkung über die Zähler „siting checks“ in `dcs.log` prüfen.
-11. **Vorwärts-FARP (v4.39)** ungetestet im Spiel (Test-Ergebnisse siehe unten): Ein gelandeter Hubschrauber löst im gruppenbezogenen F10-Menü „Logistics“ > „Deploy FARP here“ aus; das Skript baut
+10. **Standortprüfung (v4.40)** ungetestet im Spiel: ob `world.searchObjects(Object.Category.SCENERY, …)` Bäume liefert (sonst nur Gebäude), Wirkung über die Zähler „siting checks“ in `dcs.log` prüfen.
+11. **Vorwärts-FARP (v4.40)** ungetestet im Spiel (Test-Ergebnisse siehe unten): Ein gelandeter Hubschrauber löst im gruppenbezogenen F10-Menü „Logistics“ > „Deploy FARP here“ aus; das Skript baut
     `FARP` + Tankdepot/Munition/Zelt 60 m nördlich und erzeugt `slotsPerFarp` (4) Slot-Gruppen `FARP-n-S1…` (Skill `"Player"`, Land USA, Start `TakeOffGround`), die in der Slot-Liste erscheinen. Jeder Einstieg
     (`S_EVENT_BIRTH`) zählt den Vorrat herunter; erneute Lieferung am selben FARP (Radius 250 m, 300 s Abstand) füllt auf; „Dismantle nearest FARP“ baut ab; Kartenmarker zeigt die Restslots.
     Bewaffnung: aus einer AH-64D-Vorlage der Mission (`env.mission`), falls dort Pylone belegt sind, sonst `cfg.farp.payloads` (aktuell leer = unbewaffnet, CLSIDs fehlen noch).
