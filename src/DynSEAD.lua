@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.28 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.29 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -304,6 +304,26 @@ D.cfg = {
     cleanupAfter   = 600,
   },
 
+  -- Frontline Battle: große Panzerschlacht nahe einer feindlichen Basis, Verbündete und Feinde kämpfen alleine (KI gegen KI)
+  battle = {
+    enabled        = true,
+    maxActive      = 1,
+    autoSpawn      = false,
+    autoInterval   = {3000, 6000},
+    firstDelay     = 2400,
+    perSide        = 30,           -- Fahrzeuge je Seite (in Gruppen zu je groupSize)
+    groupSize      = 6,
+    baseDistance   = {4000, 12000}, -- Schlachtfeld-Mitte so weit vom feindlichen Flugplatz (m)
+    gap            = {2200, 3000}, -- Abstand der beiden Linien zu Beginn (m)
+    lineSpacing    = 45,           -- Abstand der Fahrzeuge in der Linie (m)
+    speed          = 7,            -- m/s Vormarsch
+    blueUnits      = { "M-1 Abrams", "M-1 Abrams", "M-2 Bradley", "M-2 Bradley", "M-113", "M1043 HMMWV Armament" },
+    redUnits       = { "T-72B", "T-72B", "BMP-2", "BMP-2", "BTR-80", "BRDM-2" },
+    endPercent     = 85,           -- Schlacht endet, wenn eine Seite so viel ihrer Stärke verloren hat
+    maxTime        = 2700,         -- s, danach gilt die Schlacht als unentschieden
+    cleanupAfter   = 600,
+  },
+
   siting = {
     enabled        = true,
     sceneryRadius  = 150,          -- Radarstandorte mindestens so weit (m) von Szenerie-Objekten (Gebäude, Masten, ggf. Bäume) entfernt
@@ -483,6 +503,7 @@ D.ships         = {}
 D.convoys       = {}
 D.deeps         = {}
 D.tics          = {}
+D.battles       = {}
 D.bombers       = {}
 D.fortress      = nil
 D.fortressBase  = nil
@@ -493,7 +514,7 @@ D.capturedCount = 0
 D.counter       = 0
 D.markId        = 7000
 D.started       = false
-D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0 }
+D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0, battle = 0 }
 D.blueBases     = {}
 D.nextSam       = math.huge
 D.nextCas       = math.huge
@@ -501,6 +522,7 @@ D.nextShip      = math.huge
 D.nextConvoy    = math.huge
 D.nextDeep      = math.huge
 D.nextTic       = math.huge
+D.nextBattle    = math.huge
 D.nextBomber    = math.huge
 D.nextCapRoll   = math.huge
 D.arms          = {}
@@ -2852,6 +2874,148 @@ function D.ticTick(now, players)
 end
 
 -------------------------------------------------------------------------------
+-- FRONTLINE BATTLE: KI-gegen-KI-Panzerschlacht nahe einer feindlichen Basis
+-------------------------------------------------------------------------------
+function D.spawnBattleSide(bt, blue, center, axisSign)
+  local cfg = D.cfg.battle
+  local types = blue and cfg.blueUnits or cfg.redUnits
+  local country = blue and D.cfg.blueCountry or D.cfg.redCountry
+  local nGroups = math.max(1, math.floor(cfg.perSide / cfg.groupSize))
+  local linePos = offset(center, bt.axis, axisSign * bt.gap / 2)
+  local hdg = bt.axis + (axisSign > 0 and math.pi or 0)   -- Blick zum Gegner
+  local dest = offset(center, bt.axis, -axisSign * 150)   -- bis knapp hinter die Mitte
+  local names = {}
+  for g = 1, nGroups do
+    local gname = nextId(blue and "BATB" or "BATR")
+    local units = {}
+    local gc = offset(linePos, bt.axis + math.pi / 2, (g - (nGroups + 1) / 2) * (cfg.groupSize * cfg.lineSpacing / 2 + 60))
+    for i = 1, cfg.groupSize do
+      local typ = types[((i - 1) % #types) + 1]
+      local row, col = math.floor((i - 1) / 3), (i - 1) % 3
+      local q = offset(offset(gc, bt.axis + math.pi / 2, (col - 1) * cfg.lineSpacing), bt.axis, -axisSign * row * 40)
+      if not okGround(q) then q = jitter(gc, 200) end
+      units[#units + 1] = { name = gname .. "-" .. i, type = typ, x = q.x, y = q.y, heading = hdg,
+                            skill = D.cfg.skill, playerCanDrive = false }
+    end
+    local function wp(p)
+      return { x = p.x, y = p.y, type = "Turning Point", action = "Off Road", speed = cfg.speed,
+               speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
+    end
+    local d = offset(dest, bt.axis + math.pi / 2, (g - (nGroups + 1) / 2) * (cfg.groupSize * cfg.lineSpacing / 2 + 60))
+    coalition.addGroup(country, Group.Category.GROUND, { name = gname, task = "Ground Nothing",
+      hidden = (not blue) and D.hideOnMap() or nil, units = units, route = { points = { wp(gc), wp(d) } } })
+    local alive = groupAliveCount(gname)
+    if alive < #units then
+      reportError("BATTLE", string.format("only %d of %d units spawned in %s – check D.cfg.battle unit types", alive, #units, gname))
+    end
+    if alive > 0 then names[#names + 1] = gname end
+  end
+  return names
+end
+
+local function battleCount(list)
+  local n = 0
+  for _, g in ipairs(list) do n = n + groupAliveCount(g) end
+  return n
+end
+
+function D.spawnBattle(manual)
+  local cfg = D.cfg.battle
+  if not cfg.enabled then return false end
+  if #D.battles >= cfg.maxActive then
+    if manual then msg("BATTLE: A battle is already in progress.") end
+    return false
+  end
+  local bases = redAirbases()
+  if #bases == 0 then
+    if manual then msg("BATTLE: No enemy airfield available.") end
+    return false
+  end
+  local players = playerPositions()
+  local center, base, axis, gap
+  for _ = 1, 120 do
+    local b = bases[math.random(#bases)]
+    local c = offset(b, math.random() * 2 * math.pi, randRange(cfg.baseDistance))
+    local a = math.random() * 2 * math.pi
+    local g = randRange(cfg.gap)
+    local ok = land.getSurfaceType(c) == land.SurfaceType.LAND and farFrom(c, players, 5000)
+    if ok then
+      for _, q in ipairs({ c, offset(c, a, g / 2), offset(c, a, -g / 2) }) do
+        if not okGround(q) then ok = false break end
+      end
+    end
+    if ok then center, base, axis, gap = c, b, a, g break end
+  end
+  if not center then
+    if manual then msg("BATTLE: No suitable flat ground found – try again later.") end
+    return false
+  end
+
+  local bt = { axis = axis, gap = gap, center = center, area = base.name, started = timer.getTime() }
+  bt.blue = D.spawnBattleSide(bt, true, center, -1)
+  bt.red = D.spawnBattleSide(bt, false, center, 1)
+  bt.blueInitial, bt.redInitial = battleCount(bt.blue), battleCount(bt.red)
+  if bt.blueInitial == 0 or bt.redInitial == 0 then
+    reportError("BATTLE", "a side did not spawn at all – check the type names in D.cfg.battle")
+    for _, g in ipairs(bt.blue) do destroyGroup(g) end
+    for _, g in ipairs(bt.red) do destroyGroup(g) end
+    return false
+  end
+  D.battles[#D.battles + 1] = bt
+  if D.cfg.mapMarks then
+    bt.mark = newMarkId()
+    trigger.action.markToCoalition(bt.mark, "FRONTLINE BATTLE", toV3(center), D.cfg.blueSide, true)
+  end
+  msg(string.format("FRONTLINE BATTLE near %s: Allied armor (%d vehicles) is engaging an enemy force (%d vehicles). They fight on their own – tip the balance with CAS.\nPosition: %s\nExpect light AAA and MANPADS around the enemy airfield.",
+    base.name or "enemy airfield", bt.blueInitial, bt.redInitial, D.fmtPos(center)))
+  return true
+end
+
+function D.requestBattle() D.spawnBattle(true) end
+
+function D.reportBattle()
+  if #D.battles == 0 then msg("BATTLE: No frontline battle in progress.") return end
+  for _, bt in ipairs(D.battles) do
+    msg(string.format("FRONTLINE BATTLE near %s:\nAllies: %d of %d vehicles left\nEnemy: %d of %d vehicles left\n%s",
+      bt.area or "enemy airfield", battleCount(bt.blue), bt.blueInitial, battleCount(bt.red), bt.redInitial,
+      D.fmtPos(bt.center)))
+  end
+end
+
+function D.battleTick(now)
+  local cfg = D.cfg.battle
+  for i = #D.battles, 1, -1 do
+    local bt = D.battles[i]
+    local b, r = battleCount(bt.blue), battleCount(bt.red)
+    local bLoss = (1 - b / bt.blueInitial) * 100
+    local rLoss = (1 - r / bt.redInitial) * 100
+    local verdict
+    if rLoss >= cfg.endPercent then verdict = "won"
+    elseif bLoss >= cfg.endPercent then verdict = "lost"
+    elseif now - bt.started >= cfg.maxTime then verdict = "draw" end
+    if verdict then
+      table.remove(D.battles, i)
+      if bt.mark then trigger.action.removeMark(bt.mark) end
+      if verdict == "won" then
+        D.stats.battle = D.stats.battle + 1
+        msg(string.format("FRONTLINE BATTLE near %s: The enemy force is broken, allied armor holds the field (%d vehicles left). (%d won)",
+          bt.area or "enemy airfield", b, D.stats.battle))
+      elseif verdict == "lost" then
+        msg(string.format("FRONTLINE BATTLE near %s: Allied armor was destroyed. The enemy holds the field (%d vehicles left).",
+          bt.area or "enemy airfield", r))
+      else
+        msg(string.format("FRONTLINE BATTLE near %s: The fighting has died down. Allies %d, enemy %d vehicles left.",
+          bt.area or "enemy airfield", b, r))
+      end
+      local list = {}
+      for _, g in ipairs(bt.blue) do list[#list + 1] = g end
+      for _, g in ipairs(bt.red) do list[#list + 1] = g end
+      scheduleCleanup(list, cfg.cleanupAfter)
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
 -- HAUPTMISSION: FEINDLICHE HAUPTBASIS mit dichtem, gestaffeltem Luftverteidigungsnetz
 -------------------------------------------------------------------------------
 function D.fortressSitesLeft()
@@ -3532,8 +3696,8 @@ function D.reportCampaign()
 end
 
 function D.reportStats()
-  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nBombers intercepted: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
-    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.bomber, D.stats.fortress, D.stats.cap, D.capturedCount))
+  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nFrontline battles won: %d\nBombers intercepted: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
+    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.battle, D.stats.bomber, D.stats.fortress, D.stats.cap, D.capturedCount))
 end
 
 -------------------------------------------------------------------------------
@@ -3588,6 +3752,7 @@ function D.update()
   D.convoyTick(now)
   D.deepTick(now)
   D.ticTick(now, players)
+  D.battleTick(now)
   D.bomberTick(now)
   D.fortressTick(now)
 
@@ -3630,6 +3795,9 @@ function D.update()
   end
   if D.cfg.deepStrike.enabled and D.cfg.deepStrike.autoSpawn and now >= D.nextDeep then
     D.nextDeep = D.spawnDeepStrike(false) and (now + randRange(D.cfg.deepStrike.autoInterval)) or (now + 120)
+  end
+  if D.cfg.battle.enabled and D.cfg.battle.autoSpawn and now >= D.nextBattle then
+    D.nextBattle = D.spawnBattle(false) and (now + randRange(D.cfg.battle.autoInterval)) or (now + 120)
   end
   if D.cfg.tic.enabled and D.cfg.tic.autoSpawn and now >= D.nextTic then
     D.nextTic = D.spawnTic(false) and (now + randRange(D.cfg.tic.autoInterval)) or (now + 120)
@@ -3674,6 +3842,7 @@ function D.start()
   D.nextConvoy = now + D.cfg.convoy.firstDelay
   D.nextDeep = now + D.cfg.deepStrike.firstDelay
   D.nextTic = now + D.cfg.tic.firstDelay
+  D.nextBattle = now + D.cfg.battle.firstDelay
   D.nextBomber = now + D.cfg.bomber.firstDelay
   D.nextCapRoll = now + randRange(D.cfg.cap.autoInterval)
 
@@ -3741,9 +3910,14 @@ function D.buildMenu()
     cmd(sq, "Bomber: Request intercept tasking", D.requestBomber)
     cmd(sq, "Bomber: Status", D.reportBomber)
   end
+  if D.cfg.battle.enabled then
+    local bm = sub(sq, "Frontline Battle")
+    cmd(bm, "Start frontline battle", D.requestBattle)
+    cmd(bm, "Status", D.reportBattle)
+  end
   if D.cfg.tic.enabled then
-    cmd(sq, "TIC: Request troops-in-contact tasking", D.requestTic)
-    local jt = sub(sq, "JTAC")
+    local jt = sub(sq, "TIC / JTAC")
+    cmd(jt, "Request troops-in-contact tasking", D.requestTic)
     cmd(jt, "Situation report", D.reportTic)
     cmd(jt, "Friendlies: green smoke", function() D.ticMarkFriendly("green") end)
     cmd(jt, "Friendlies: orange smoke", function() D.ticMarkFriendly("orange") end)
@@ -3862,12 +4036,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.28 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.29 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.28 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.29 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
