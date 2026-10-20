@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.21 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.22 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -3420,8 +3420,43 @@ function D.farpTestBuild()
   msg(text)
 end
 
+-- Test 2: Client-Slot per Skript am Test-FARP erzeugen (taucht der Slot in der Slot-Liste auf?)
+function D.farpTestSlot()
+  local pos = D.farpTest and D.farpTest.pos
+  if not pos then
+    for _, pu in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+      if pu and pu:isExist() then pos = toV2(pu:getPoint()) break end
+    end
+  end
+  if not pos then msg("FARP TEST: No test FARP and no player found. Build the FARP first.") return end
+  if D.farpTestGroup then msg("FARP TEST: A test slot group already exists. Remove the test first.") return end
+
+  local gname = "FARPSLOT-1"
+  local x, y = pos.x + 20, pos.y + 20
+  local ok, err = pcall(coalition.addGroup, D.cfg.blueCountry, Group.Category.HELICOPTER, {
+    name = gname, task = "CAS", uncontrolled = false,
+    units = { { name = gname .. "-1", type = "AH-64D_BLK_II", skill = "Client", x = x, y = y, heading = 0,
+                alt = land.getHeight({ x = x, y = y }), alt_type = "BARO", speed = 0 } },
+    route = { points = { { x = x, y = y, alt = land.getHeight({ x = x, y = y }), alt_type = "BARO",
+                           type = "TakeOffGround", action = "From Ground Area", speed = 0,
+                           ETA = 0, ETA_locked = false, speed_locked = true,
+                           task = { id = "ComboTask", params = { tasks = {} } } } } },
+  })
+  local g = Group.getByName(gname)
+  if g and g:isExist() then D.farpTestGroup = gname end
+  local line = string.format("FARP TEST (client slot): group %s – %s",
+    gname, g and "created (AI-controlled until a player takes it)" or ("FAILED" .. (ok and "" or (" – " .. tostring(err)))))
+  env.info("DynSEAD " .. line)
+  msg(line .. "\nNow leave your aircraft to the slot list and check whether a new AH-64D slot \"" .. gname ..
+      "\" is offered. If it is, a script-built spawn point near the FARP is possible. Rejoining the server may be needed for the list to refresh.")
+end
+
 function D.farpTestRemove()
-  if not D.farpTest then msg("FARP TEST: No test FARP to remove.") return end
+  if D.farpTestGroup then
+    destroyGroup(D.farpTestGroup)
+    D.farpTestGroup = nil
+  end
+  if not D.farpTest then msg("FARP TEST: Test group removed, no test FARP to remove.") return end
   for _, name in ipairs(D.farpTest.names) do
     local o = StaticObject.getByName(name)
     if o then pcall(function() o:destroy() end) end
@@ -3696,6 +3731,7 @@ function D.buildMenu()
     local dbg = sub(root, "DEBUG")
     cmd(dbg, "Show all units on map (on/off)", D.debugMapToggle)
     cmd(dbg, "FARP test: build at first player", D.farpTestBuild)
+    cmd(dbg, "FARP test: spawn client slot at FARP", D.farpTestSlot)
     cmd(dbg, "FARP test: remove", D.farpTestRemove)
     if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
@@ -3801,12 +3837,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.21 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.22 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.21 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.22 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
