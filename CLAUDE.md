@@ -13,7 +13,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 | Pfad | Inhalt |
 |---|---|
 | `src/DynSEAD.lua` | Missionsskript (aktuell v4.38). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.38 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.38 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten). Briefing (englisch) steht im Dictionary: `DictKey_descriptionText_1` (Lage), `DictKey_descriptionBlueTask_3` (Auftrag, Support, Lagebild, SAM-Gefechtsordnung, Nebenaufträge, F10-Menü) – bei Änderungen an SAM-Typen, Menü oder Intel mitpflegen |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -72,7 +72,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
   in ≥ 3 von 8 Richtungen bei 1,5/3/5 km blockieren); Bebauung: nicht direkt neben Gebäuden (`world.searchObjects(SCENERY)` im Umkreis `sceneryRadius` = 150 m), nicht zwischen
   ≥ 10 Objekten im Umkreis 400 m und nicht neben Objekten ≥ 12 m Höhe (aus `getDesc().box`) im Umkreis 300 m. DCS hat keine Wald-Abfrage: Bäume werden nur erkannt, falls sie als Szenerie-Objekte geliefert werden; große Wälder sperrt man per `NOSAM`-Zone.
   Straßennähe (v4.38, `siting.nearRoad`): da Wälder nicht abfragbar sind, verschiebt `D.nearRoad(p, maxShift)` SAM-Standorte 60–250 m neben die nächste Straße (`land.getClosestPointOnRoads`),
-  im ersten Durchlauf von `D.findSpot` (max. 6 km Verschiebung), bei Hauptbasis-Schichten und Stellungswechseln (max. 1,5 km). Wirkung im Spiel ungetestet.
+  im ersten Durchlauf von `D.findSpot` (max. 6 km Verschiebung), bei Hauptbasis-Schichten und Stellungswechseln (max. 1,5 km). Im Spiel bestätigt: deutlich weniger Waldstandorte.
   Die Prüfung gilt nur im ersten Durchlauf von `D.findSpot` (weich, blockiert nie), auch für Hauptbasis-Schichten und Stellungswechsel. `dcs.log` zeigt pro Stellung die Zähler
   „siting checks“ (Wirkung prüfbar).
 - Keine einzelnen Infanteristen: Einzelpersonen sind schwer zu finden, daher spawnen Garnison, CAS, TIC (auch die Verbündeten) und Deep-Strike-Schutz nur
