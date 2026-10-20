@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.29 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.31 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -183,8 +183,9 @@ D.cfg = {
   },
 
   cas = {
-    maxActive      = 3,
+    maxActive      = 10,
     autoSpawn      = true,
+    spawnAll       = true,         -- alle CAS-Ziele einer AO erscheinen sofort beim Aktivieren (maxActive muss dafür groß genug sein)
     firstDelay     = 30,
     interval       = {300, 900},
     successPercent = 70,
@@ -1085,6 +1086,19 @@ function D.createSam(ao, key, p, forceMode)
       end
     end
     D.setRadar(site, site.mode ~= "ambush")
+    -- Kontrolle: sind alle Einheiten der Stellung wirklich entstanden? (DCS verwirft Einheiten mit ungültigem Typnamen stillschweigend)
+    local g = Group.getByName(site.group)
+    local alive = g and g:isExist() and #(g:getUnits() or {}) or 0
+    env.info(string.format("DynSEAD: %s %s – %d of %d units spawned", key, gname, alive, #units))
+    if alive < #units then
+      local have = {}
+      for _, u in ipairs(g and g:isExist() and g:getUnits() or {}) do have[u:getTypeName()] = (have[u:getTypeName()] or 0) + 1 end
+      local missing = {}
+      for _, u in ipairs(units) do
+        if (have[u.type] or 0) > 0 then have[u.type] = have[u.type] - 1 else missing[#missing + 1] = u.type end
+      end
+      reportError("SAM", string.format("%s: only %d of %d units spawned, missing: %s", key, alive, #units, table.concat(missing, ", ")))
+    end
   end, "Radar"), nil, now + 3)
 
   env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
@@ -3235,7 +3249,7 @@ function D.activateAirbaseAO(name)
 
   local now = timer.getTime()
   D.nextSam = math.min(D.nextSam, now + 10)
-  D.nextCas = math.min(D.nextCas, now + D.cfg.cas.firstDelay)
+  D.nextCas = math.min(D.nextCas, now + (D.cfg.cas.spawnAll and 5 or D.cfg.cas.firstDelay))
 
   D.say({ "new_objective", tPlace(name), "airfield", tBE(p) })
   msg(string.format("NEW OBJECTIVE: %s airfield\nDestroy: %d SAM site(s), %d CAS target(s)%s\nPosition: %s",
@@ -3785,7 +3799,11 @@ function D.update()
     D.nextSam = ok and (now + 5) or (now + 30)
   end
   if D.cfg.cas.autoSpawn and now >= D.nextCas then
-    D.nextCas = D.spawnCAS(false) and (now + randRange(D.cfg.cas.interval)) or (now + 60)
+    local ok = D.spawnCAS(false)
+    if ok and D.cfg.cas.spawnAll then
+      for _ = 1, 20 do if not D.spawnCAS(false) then break end end
+    end
+    D.nextCas = ok and (now + randRange(D.cfg.cas.interval)) or (now + 60)
   end
   if D.cfg.ship.enabled and D.cfg.ship.autoSpawn and now >= D.nextShip then
     D.nextShip = D.spawnShip(nil, false) and (now + randRange(D.cfg.ship.autoInterval)) or (now + 120)
@@ -4036,12 +4054,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.29 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.31 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.29 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.31 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
