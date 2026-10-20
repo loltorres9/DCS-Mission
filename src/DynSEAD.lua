@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.24 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.29 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -67,10 +67,10 @@ D.cfg = {
   },
 
   sam = {
-    maxActive         = 5,         -- SAM-Stellungen gleichzeitig (gesamt, alle AOs)
+    maxActive         = 12,        -- SAM-Stellungen gleichzeitig (gesamt, alle AOs)
+    spawnAll          = true,      -- alle SAM-Stellungen einer AO erscheinen sofort beim Aktivieren (nicht nacheinander)
     respawnDelay      = {120, 300},
     minSeparation     = 12000,
-    intelError        = 7000,      -- Start-Ungenauigkeit (m), wird per ELINT kleiner
     shoradChance      = 0.5,
     cleanupAfter      = 900,
     armEvasion = {
@@ -127,19 +127,6 @@ D.cfg = {
       SA10 = { always = 1 },
     },
     pool              = { SA2 = 2, SA3 = 3, SA6 = 3, SA11 = 2, SA8 = 2, SA15 = 1 },
-  },
-
-  elint = {
-    enabled      = true,
-    awacsRange   = 250000,         -- Reichweite AWACS-ELINT (m)
-    awacsFactor  = 0.985,           -- Fehler * Faktor pro Tick (10 s) bei Ortung durch AWACS
-    players      = true,           -- Spieler in der Luft orten ebenfalls
-    playerRange  = 80000,
-    playerFactor = 0.99,
-    errPerKm     = 10,             -- beste Genauigkeit wächst mit Sensor-Entfernung (m pro km)
-    minError     = 400,            -- absolute Untergrenze (m)
-    locatedAt    = 600,            -- ab hier gilt die Stellung als "LOCATED"
-    announceAt   = {3500, 1800},    -- Meldung, wenn diese Genauigkeit unterschritten wird
   },
 
   awacs = {
@@ -314,6 +301,26 @@ D.cfg = {
     maxTime        = 2700,         -- s, danach läuft der Auftrag aus
     autoMarkRange  = 12000,        -- Verbündete markieren sich automatisch, sobald ein Spieler so nah kommt (m)
     laserCode      = 1688,
+    cleanupAfter   = 600,
+  },
+
+  -- Frontline Battle: große Panzerschlacht nahe einer feindlichen Basis, Verbündete und Feinde kämpfen alleine (KI gegen KI)
+  battle = {
+    enabled        = true,
+    maxActive      = 1,
+    autoSpawn      = false,
+    autoInterval   = {3000, 6000},
+    firstDelay     = 2400,
+    perSide        = 30,           -- Fahrzeuge je Seite (in Gruppen zu je groupSize)
+    groupSize      = 6,
+    baseDistance   = {4000, 12000}, -- Schlachtfeld-Mitte so weit vom feindlichen Flugplatz (m)
+    gap            = {2200, 3000}, -- Abstand der beiden Linien zu Beginn (m)
+    lineSpacing    = 45,           -- Abstand der Fahrzeuge in der Linie (m)
+    speed          = 7,            -- m/s Vormarsch
+    blueUnits      = { "M-1 Abrams", "M-1 Abrams", "M-2 Bradley", "M-2 Bradley", "M-113", "M1043 HMMWV Armament" },
+    redUnits       = { "T-72B", "T-72B", "BMP-2", "BMP-2", "BTR-80", "BRDM-2" },
+    endPercent     = 85,           -- Schlacht endet, wenn eine Seite so viel ihrer Stärke verloren hat
+    maxTime        = 2700,         -- s, danach gilt die Schlacht als unentschieden
     cleanupAfter   = 600,
   },
 
@@ -496,6 +503,7 @@ D.ships         = {}
 D.convoys       = {}
 D.deeps         = {}
 D.tics          = {}
+D.battles       = {}
 D.bombers       = {}
 D.fortress      = nil
 D.fortressBase  = nil
@@ -506,7 +514,7 @@ D.capturedCount = 0
 D.counter       = 0
 D.markId        = 7000
 D.started       = false
-D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0 }
+D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0, battle = 0 }
 D.blueBases     = {}
 D.nextSam       = math.huge
 D.nextCas       = math.huge
@@ -514,6 +522,7 @@ D.nextShip      = math.huge
 D.nextConvoy    = math.huge
 D.nextDeep      = math.huge
 D.nextTic       = math.huge
+D.nextBattle    = math.huge
 D.nextBomber    = math.huge
 D.nextCapRoll   = math.huge
 D.arms          = {}
@@ -1016,35 +1025,7 @@ function D.setRadar(site, on)
   if not c then return end
   c:setOption(AI.Option.Ground.id.ALARM_STATE,
     on and AI.Option.Ground.val.ALARM_STATE.RED or AI.Option.Ground.val.ALARM_STATE.GREEN)
-  local wasOn = site.radarOn
   site.radarOn = on
-  if on and not wasOn and site.ao then
-    local now = timer.getTime()
-    if site.announceBack then
-      site.announceBack = nil
-      D.say({ tSam(site.key), "back_up", tBE(site.intelPos) })
-    elseif site.mode == "ambush" and (not site.lastPopup or now - site.lastPopup > D.cfg.voice.popupCooldown) then
-      site.lastPopup = now
-      D.say({ "popup", tSam(site.key), "now_active", tBE(site.intelPos), "check_six" })
-    end
-  end
-end
-
--- Intel-Position = wahre Position + fester Versatz, der mit dem Fehler schrumpft
-function D.updateIntelPos(s)
-  local k = s.err / s.errMax
-  s.intelPos = { x = s.pos.x + s.offX * k, y = s.pos.y + s.offY * k }
-end
-
-function D.updateMark(s)
-  if not D.cfg.mapMarks then return end
-  if s.mark then trigger.action.removeMark(s.mark) end
-  s.mark = newMarkId()
-  local quality = (s.err <= D.cfg.elint.locatedAt) and ("LOCATED ±" .. fmtDist(s.err)) or ("±" .. fmtDist(s.err))
-  trigger.action.markToCoalition(s.mark,
-    string.format("[%s] Suspected %s (%s)", s.ao.name, s.def.name, quality),
-    toV3(s.intelPos), D.cfg.blueSide, true)
-  s.markErr = s.err
 end
 
 function D.spawnSam()
@@ -1065,8 +1046,8 @@ function D.spawnSam()
   return D.createSam(ao, weighted(D.cfg.sam.pool), p)
 end
 
--- Eine SAM-Stellung des Typs key an Position p in der AO ao erzeugen (quiet: keine Einzelmeldung)
-function D.createSam(ao, key, p, errMax, quiet, forceMode)
+-- Eine SAM-Stellung des Typs key an Position p in der AO ao erzeugen
+function D.createSam(ao, key, p, forceMode)
   local def = D.samTypes[key]
   local gname = nextId("SAM-" .. key)
   local units, crit = buildSamUnits(def, p, gname)
@@ -1074,21 +1055,15 @@ function D.createSam(ao, key, p, errMax, quiet, forceMode)
     { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
 
   local now = timer.getTime()
-  errMax = errMax or D.cfg.sam.intelError
-  local a = math.random() * 2 * math.pi
-  local d = errMax * math.sqrt(math.random())
   local site = {
     group = gname, key = key, def = def, pos = p, critical = crit, ao = ao,
     mode = forceMode or weighted((D.cfg.sam.modesByType or {})[key] or D.cfg.sam.modes), radarOn = true,
     ambushRange = ((D.cfg.sam.engageRange or {})[key] and D.cfg.sam.engageRange[key] * D.cfg.sam.ambushFactor)
                   or D.cfg.sam.ambushRange,
     nextToggle = now + randRange(D.cfg.sam.blinkOn),
-    errMax = errMax, err = errMax, offX = d * math.cos(a), offY = d * math.sin(a),
   }
-  D.updateIntelPos(site)
   ao.samLeft = ao.samLeft - 1
   ao.samActive = ao.samActive + 1
-  D.updateMark(site)
 
   local pd = D.cfg.sam.pointDefense
   if pd and pd.types[key] and math.random() < pd.chance then
@@ -1115,11 +1090,6 @@ function D.createSam(ao, key, p, errMax, quiet, forceMode)
   env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
     key, D.siting.tested, D.siting.scenery, D.siting.urban, D.siting.slope, D.siting.horizon, D.siting.zone,
     D.siting.apiFailed and " (scenery search unavailable)" or ""))
-  if not quiet then
-    D.say({ "all_players", "new_threat", tSam(key), tBE(site.intelPos), tDist(site.err), "area", tPlace(ao.name) })
-    msg(string.format("INTEL [%s]: New threat reported – %s.\nApprox. position (±%s): %s",
-      ao.name, def.name, fmtDist(site.err), D.fmtPos(site.intelPos)))
-  end
   return true
 end
 
@@ -1166,18 +1136,8 @@ function D.startRelocation(s)
 end
 
 function D.finishRelocation(s, p, now)
-  -- Marker bleibt an der alten Intel-Position, Unsicherheit wächst entsprechend
-  local old = s.intelPos
-  local ox, oy = old.x - p.x, old.y - p.y
-  local off = math.sqrt(ox * ox + oy * oy)
   s.pos = p
-  s.err = math.max(s.err, off * 1.1, 500)
-  s.errMax = s.err
-  s.offX, s.offY = ox, oy
-  D.updateIntelPos(s)
-  D.updateMark(s)
   s.moving = nil
-  s.relocated = true
   s.setupUntil = now + randRange(D.cfg.sam.relocate.setupTime)
 end
 
@@ -1309,7 +1269,6 @@ function D.updateArms()
         if a.reactAt and now >= a.reactAt then
           a.site = s
           s.armDark = (s.armDark or 0) + 1
-          if s.radarOn then D.say({ tSam(s.key), "gone_silent" }) end
           D.setRadar(s, false)
         end
       end
@@ -1625,23 +1584,10 @@ function D.spawnManpadsZones(ao)
       if #units > 0 then
         coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
           { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
-        local entry = { group = gname, center = c }
-        D.drawManpads(entry)
-        ao.manpads[#ao.manpads + 1] = entry
-        D.say({ "caution_manpads", tBE(c), "stay_above", tNum(math.floor(cfg.safeAltFt / 1000)), "thousand" })
-        msg(string.format("THREAT WARNING [%s]: MANPADS activity reported within %s of\n%s\nAvoid low altitude – stay above %d ft AGL.",
-          ao.name, fmtDist(cfg.radius), D.fmtPos(c), cfg.safeAltFt))
+        ao.manpads[#ao.manpads + 1] = { group = gname, center = c }
       end
     end
   end
-end
-
-function D.drawManpads(entry)
-  if not D.cfg.drawAO then return end
-  if entry.drawId then trigger.action.removeMark(entry.drawId) end
-  entry.drawId = newMarkId()
-  trigger.action.circleToAll(D.cfg.blueSide, entry.drawId, toV3(entry.center), D.cfg.manpads.radius,
-    {1, 0.6, 0, 0.9}, {1, 0.6, 0, 0.12}, 3, true, "MANPADS threat area")
 end
 
 -- Alle Kartenzeichnungen neu anlegen (DCS überträgt Skript-Zeichnungen nicht
@@ -1654,11 +1600,7 @@ function D.redrawAll()
       trigger.action.removeMark(ao.wptMark)
       D.addAOWaypoint(ao)
     end
-    for _, m in ipairs(ao.manpads or {}) do
-      if groupAliveCount(m.group) > 0 then D.drawManpads(m) end
-    end
   end
-  for _, site in ipairs(D.sites) do D.updateMark(site) end
 end
 
 function D.scheduleRedraw()
@@ -1671,22 +1613,36 @@ end
 function D.clearManpads(ao)
   for _, m in ipairs(ao.manpads or {}) do
     destroyGroup(m.group)
-    if m.drawId then trigger.action.removeMark(m.drawId) end
   end
   ao.manpads = {}
 end
 
-function D.reportManpads()
-  local lines = { "MANPADS THREAT AREAS:" }
-  for _, ao in ipairs(D.aos) do
-    for _, m in ipairs(ao.manpads or {}) do
-      if groupAliveCount(m.group) > 0 then
-        lines[#lines + 1] = string.format("• [%s] radius %s\n   %s", ao.name, fmtDist(D.cfg.manpads.radius), D.fmtPos(m.center))
-      end
+-- Lagebild einer AO: nur SAM-Typen und MANPADS ja/nein, keine Positionen
+function D.aoThreats(ao)
+  local counts, order = {}, {}
+  for _, st in ipairs(D.sites) do
+    if st.ao == ao then
+      local n = st.def.name
+      if not counts[n] then counts[n] = 0; order[#order + 1] = n end
+      counts[n] = counts[n] + 1
     end
   end
-  if #lines == 1 then lines[#lines + 1] = "None reported." end
-  lines[#lines + 1] = string.format("Recommendation: stay above %d ft AGL.", D.cfg.manpads.safeAltFt)
+  local parts = {}
+  for _, n in ipairs(order) do parts[#parts + 1] = string.format("%dx %s", counts[n], n) end
+  local manpads = false
+  for _, m in ipairs(ao.manpads or {}) do
+    if groupAliveCount(m.group) > 0 then manpads = true break end
+  end
+  return string.format("[%s] SAM: %s\n   MANPADS: %s", ao.name,
+    #parts > 0 and table.concat(parts, ", ") or "none", manpads
+      and string.format("expect MANPADS – stay above %d ft AGL", D.cfg.manpads.safeAltFt) or "none reported")
+end
+
+function D.reportThreats()
+  if #D.aos == 0 then msg("THREATS: No active AOs.") return end
+  local lines = { "THREAT ASSESSMENT (locations unknown):" }
+  for _, ao in ipairs(D.aos) do lines[#lines + 1] = D.aoThreats(ao) end
+  lines[#lines + 1] = string.format("SAM sites neutralized so far: %d", D.stats.sam)
   msg(table.concat(lines, "\n"))
 end
 
@@ -1746,69 +1702,6 @@ function D.reportNav()
     end
   end
   msg(table.concat(lines, "\n"))
-end
-
-function D.elint()
-  local cfg = D.cfg.elint
-  if not cfg.enabled then return end
-
-  local sensors = {}
-  local aw = D.awacsUnit()
-  if aw then sensors[#sensors + 1] = { p = aw:getPoint(), range = cfg.awacsRange, factor = cfg.awacsFactor } end
-  if cfg.players then
-    for _, u in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
-      if u and u:isExist() and u:inAir() then
-        sensors[#sensors + 1] = { p = u:getPoint(), range = cfg.playerRange, factor = cfg.playerFactor }
-      end
-    end
-  end
-  if #sensors == 0 then return end
-
-  for _, s in ipairs(D.sites) do
-    if s.radarOn and s.err > cfg.minError then
-      local sp = toV3(s.pos)
-      sp.y = sp.y + 15
-      -- jeder Sensor mit Sichtlinie verkleinert den Fehler, aber nur bis zu seiner
-      -- entfernungsabhängigen Genauigkeitsgrenze; der beste Sensor zählt
-      local newErr = s.err
-      for _, sn in ipairs(sensors) do
-        local d = dist(toV2(sn.p), s.pos)
-        if d <= sn.range and land.isVisible(sn.p, sp) then
-          local floor = math.max(cfg.minError, d / 1000 * cfg.errPerKm)
-          if s.err > floor then
-            newErr = math.min(newErr, math.max(floor, s.err * sn.factor))
-          end
-        end
-      end
-
-      if newErr < s.err then
-        local old = s.err
-        s.err = newErr
-        D.updateIntelPos(s)
-        if not s.markErr or s.err < s.markErr * 0.8 or s.err <= cfg.locatedAt then D.updateMark(s) end
-
-        if s.relocated then
-          s.relocated = nil
-          D.say({ "heads_up", tSam(s.key), "relocated", "new_emissions", tBE(s.intelPos), tDist(s.err), "prev_invalid" })
-          msg(string.format("ELINT [%s]: %s emitting from a NEW position – it has relocated!\nPrevious fix invalid. Current estimate (±%s): %s",
-            s.ao.name, s.def.name, fmtDist(s.err), D.fmtPos(s.intelPos)))
-        elseif s.err <= cfg.locatedAt and old > cfg.locatedAt then
-          D.say({ tSam(s.key), "located", tBE(s.intelPos), "coords_f10" })
-          msg(string.format("ELINT [%s]: %s LOCATED (±%s).\nPosition: %s",
-            s.ao.name, s.def.name, fmtDist(s.err), D.fmtPos(s.intelPos)))
-        else
-          for _, th in ipairs(cfg.announceAt) do
-            if old > th and s.err <= th then
-              D.say({ "update", tSam(s.key), tBE(s.intelPos), "now", tDist(s.err) })
-              msg(string.format("ELINT [%s]: %s position refined to ±%s.\nPosition: %s",
-                s.ao.name, s.def.name, fmtDist(s.err), D.fmtPos(s.intelPos)))
-              break
-            end
-          end
-        end
-      end
-    end
-  end
 end
 
 -------------------------------------------------------------------------------
@@ -2981,6 +2874,148 @@ function D.ticTick(now, players)
 end
 
 -------------------------------------------------------------------------------
+-- FRONTLINE BATTLE: KI-gegen-KI-Panzerschlacht nahe einer feindlichen Basis
+-------------------------------------------------------------------------------
+function D.spawnBattleSide(bt, blue, center, axisSign)
+  local cfg = D.cfg.battle
+  local types = blue and cfg.blueUnits or cfg.redUnits
+  local country = blue and D.cfg.blueCountry or D.cfg.redCountry
+  local nGroups = math.max(1, math.floor(cfg.perSide / cfg.groupSize))
+  local linePos = offset(center, bt.axis, axisSign * bt.gap / 2)
+  local hdg = bt.axis + (axisSign > 0 and math.pi or 0)   -- Blick zum Gegner
+  local dest = offset(center, bt.axis, -axisSign * 150)   -- bis knapp hinter die Mitte
+  local names = {}
+  for g = 1, nGroups do
+    local gname = nextId(blue and "BATB" or "BATR")
+    local units = {}
+    local gc = offset(linePos, bt.axis + math.pi / 2, (g - (nGroups + 1) / 2) * (cfg.groupSize * cfg.lineSpacing / 2 + 60))
+    for i = 1, cfg.groupSize do
+      local typ = types[((i - 1) % #types) + 1]
+      local row, col = math.floor((i - 1) / 3), (i - 1) % 3
+      local q = offset(offset(gc, bt.axis + math.pi / 2, (col - 1) * cfg.lineSpacing), bt.axis, -axisSign * row * 40)
+      if not okGround(q) then q = jitter(gc, 200) end
+      units[#units + 1] = { name = gname .. "-" .. i, type = typ, x = q.x, y = q.y, heading = hdg,
+                            skill = D.cfg.skill, playerCanDrive = false }
+    end
+    local function wp(p)
+      return { x = p.x, y = p.y, type = "Turning Point", action = "Off Road", speed = cfg.speed,
+               speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
+    end
+    local d = offset(dest, bt.axis + math.pi / 2, (g - (nGroups + 1) / 2) * (cfg.groupSize * cfg.lineSpacing / 2 + 60))
+    coalition.addGroup(country, Group.Category.GROUND, { name = gname, task = "Ground Nothing",
+      hidden = (not blue) and D.hideOnMap() or nil, units = units, route = { points = { wp(gc), wp(d) } } })
+    local alive = groupAliveCount(gname)
+    if alive < #units then
+      reportError("BATTLE", string.format("only %d of %d units spawned in %s – check D.cfg.battle unit types", alive, #units, gname))
+    end
+    if alive > 0 then names[#names + 1] = gname end
+  end
+  return names
+end
+
+local function battleCount(list)
+  local n = 0
+  for _, g in ipairs(list) do n = n + groupAliveCount(g) end
+  return n
+end
+
+function D.spawnBattle(manual)
+  local cfg = D.cfg.battle
+  if not cfg.enabled then return false end
+  if #D.battles >= cfg.maxActive then
+    if manual then msg("BATTLE: A battle is already in progress.") end
+    return false
+  end
+  local bases = redAirbases()
+  if #bases == 0 then
+    if manual then msg("BATTLE: No enemy airfield available.") end
+    return false
+  end
+  local players = playerPositions()
+  local center, base, axis, gap
+  for _ = 1, 120 do
+    local b = bases[math.random(#bases)]
+    local c = offset(b, math.random() * 2 * math.pi, randRange(cfg.baseDistance))
+    local a = math.random() * 2 * math.pi
+    local g = randRange(cfg.gap)
+    local ok = land.getSurfaceType(c) == land.SurfaceType.LAND and farFrom(c, players, 5000)
+    if ok then
+      for _, q in ipairs({ c, offset(c, a, g / 2), offset(c, a, -g / 2) }) do
+        if not okGround(q) then ok = false break end
+      end
+    end
+    if ok then center, base, axis, gap = c, b, a, g break end
+  end
+  if not center then
+    if manual then msg("BATTLE: No suitable flat ground found – try again later.") end
+    return false
+  end
+
+  local bt = { axis = axis, gap = gap, center = center, area = base.name, started = timer.getTime() }
+  bt.blue = D.spawnBattleSide(bt, true, center, -1)
+  bt.red = D.spawnBattleSide(bt, false, center, 1)
+  bt.blueInitial, bt.redInitial = battleCount(bt.blue), battleCount(bt.red)
+  if bt.blueInitial == 0 or bt.redInitial == 0 then
+    reportError("BATTLE", "a side did not spawn at all – check the type names in D.cfg.battle")
+    for _, g in ipairs(bt.blue) do destroyGroup(g) end
+    for _, g in ipairs(bt.red) do destroyGroup(g) end
+    return false
+  end
+  D.battles[#D.battles + 1] = bt
+  if D.cfg.mapMarks then
+    bt.mark = newMarkId()
+    trigger.action.markToCoalition(bt.mark, "FRONTLINE BATTLE", toV3(center), D.cfg.blueSide, true)
+  end
+  msg(string.format("FRONTLINE BATTLE near %s: Allied armor (%d vehicles) is engaging an enemy force (%d vehicles). They fight on their own – tip the balance with CAS.\nPosition: %s\nExpect light AAA and MANPADS around the enemy airfield.",
+    base.name or "enemy airfield", bt.blueInitial, bt.redInitial, D.fmtPos(center)))
+  return true
+end
+
+function D.requestBattle() D.spawnBattle(true) end
+
+function D.reportBattle()
+  if #D.battles == 0 then msg("BATTLE: No frontline battle in progress.") return end
+  for _, bt in ipairs(D.battles) do
+    msg(string.format("FRONTLINE BATTLE near %s:\nAllies: %d of %d vehicles left\nEnemy: %d of %d vehicles left\n%s",
+      bt.area or "enemy airfield", battleCount(bt.blue), bt.blueInitial, battleCount(bt.red), bt.redInitial,
+      D.fmtPos(bt.center)))
+  end
+end
+
+function D.battleTick(now)
+  local cfg = D.cfg.battle
+  for i = #D.battles, 1, -1 do
+    local bt = D.battles[i]
+    local b, r = battleCount(bt.blue), battleCount(bt.red)
+    local bLoss = (1 - b / bt.blueInitial) * 100
+    local rLoss = (1 - r / bt.redInitial) * 100
+    local verdict
+    if rLoss >= cfg.endPercent then verdict = "won"
+    elseif bLoss >= cfg.endPercent then verdict = "lost"
+    elseif now - bt.started >= cfg.maxTime then verdict = "draw" end
+    if verdict then
+      table.remove(D.battles, i)
+      if bt.mark then trigger.action.removeMark(bt.mark) end
+      if verdict == "won" then
+        D.stats.battle = D.stats.battle + 1
+        msg(string.format("FRONTLINE BATTLE near %s: The enemy force is broken, allied armor holds the field (%d vehicles left). (%d won)",
+          bt.area or "enemy airfield", b, D.stats.battle))
+      elseif verdict == "lost" then
+        msg(string.format("FRONTLINE BATTLE near %s: Allied armor was destroyed. The enemy holds the field (%d vehicles left).",
+          bt.area or "enemy airfield", r))
+      else
+        msg(string.format("FRONTLINE BATTLE near %s: The fighting has died down. Allies %d, enemy %d vehicles left.",
+          bt.area or "enemy airfield", b, r))
+      end
+      local list = {}
+      for _, g in ipairs(bt.blue) do list[#list + 1] = g end
+      for _, g in ipairs(bt.red) do list[#list + 1] = g end
+      scheduleCleanup(list, cfg.cleanupAfter)
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
 -- HAUPTMISSION: FEINDLICHE HAUPTBASIS mit dichtem, gestaffeltem Luftverteidigungsnetz
 -------------------------------------------------------------------------------
 function D.fortressSitesLeft()
@@ -3052,7 +3087,7 @@ function D.activateFortress(manual)
       end
       if p then
         placed[#placed + 1] = p
-        D.createSam(ao, layer.key, p, cfg.intelError, true, "always")   -- Hauptbasis: alle Radare strahlen dauerhaft
+        D.createSam(ao, layer.key, p, "always")   -- Hauptbasis: alle Radare strahlen dauerhaft
         built = built + 1
         kinds[layer.key] = (kinds[layer.key] or 0) + 1
       else
@@ -3284,7 +3319,6 @@ function D.debugCapture()
     if s.ao == ao then
       destroyGroup(s.group)
       if s.pdGroup then destroyGroup(s.pdGroup) end
-      if s.mark then trigger.action.removeMark(s.mark) end
       table.remove(D.sites, i)
     end
   end
@@ -3640,28 +3674,6 @@ end
 -------------------------------------------------------------------------------
 -- BERICHTE
 -------------------------------------------------------------------------------
-function D.voicePicture()
-  if not D.voiceOK then msg("Overlord voice not available (voice files missing, see dcs.log).") return end
-  if #D.sites == 0 then D.say({ "no_sites" }) return end
-  local t = { "threat_picture", tNum(#D.sites), "sites" }
-  for _, s in ipairs(D.sites) do
-    t[#t + 1] = { tSam(s.key), tBE(s.intelPos), s.radarOn and "active" or "silent" }
-  end
-  D.say(t)
-end
-
-function D.reportSEAD()
-  if #D.sites == 0 then msg("SEAD: No known SAM sites active.") return end
-  local lines = { "SEAD SITREP:" }
-  for i, s in ipairs(D.sites) do
-    local quality = (s.err <= D.cfg.elint.locatedAt) and ("LOCATED ±" .. fmtDist(s.err)) or ("±" .. fmtDist(s.err))
-    lines[#lines + 1] = string.format("%d) [%s] %s – %s – %s\n   %s", i, s.ao.name, s.def.name,
-      s.radarOn and "radar ACTIVE" or "radar silent", quality, D.fmtPos(s.intelPos))
-  end
-  lines[#lines + 1] = string.format("Neutralized so far: %d", D.stats.sam)
-  msg(table.concat(lines, "\n"))
-end
-
 function D.reportCampaign()
   if D.cfg.mode ~= "airbases" then
     msg(string.format("Endless mode – %d AO(s) active.", #D.aos))
@@ -3684,8 +3696,8 @@ function D.reportCampaign()
 end
 
 function D.reportStats()
-  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nBombers intercepted: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
-    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.bomber, D.stats.fortress, D.stats.cap, D.capturedCount))
+  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nFrontline battles won: %d\nBombers intercepted: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
+    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.battle, D.stats.bomber, D.stats.fortress, D.stats.cap, D.capturedCount))
 end
 
 -------------------------------------------------------------------------------
@@ -3706,7 +3718,6 @@ function D.update()
       table.remove(D.sites, i)
       s.ao.samActive = s.ao.samActive - 1
       D.stats.sam = D.stats.sam + 1
-      if s.mark then trigger.action.removeMark(s.mark) end
       msg(string.format("SEAD [%s]: %s site neutralized! (%d total)", s.ao.name, s.def.name, D.stats.sam))
       D.say({ "good_effect", tSam(s.key), "site_destroyed", tNum(D.stats.sam), "down" })
       if not s.ao.fortress then D.nextSam = math.max(D.nextSam, now + randRange(D.cfg.sam.respawnDelay)) end
@@ -3723,7 +3734,6 @@ function D.update()
   -- AWACS / ELINT
   D.checkAwacs(now)
   D.checkTankers(now)
-  D.elint()
 
   -- CAS
   for i = #D.casTasks, 1, -1 do
@@ -3742,6 +3752,7 @@ function D.update()
   D.convoyTick(now)
   D.deepTick(now)
   D.ticTick(now, players)
+  D.battleTick(now)
   D.bomberTick(now)
   D.fortressTick(now)
 
@@ -3758,9 +3769,20 @@ function D.update()
   -- Kampagne
   if D.cfg.mode == "airbases" then D.checkAOs(now) end
 
+  for _, ao in ipairs(D.aos) do
+    if not ao.briefed and not ao.fortress and ao.samActive > 0 and (ao.samLeft == 0 or ao.samLeft == math.huge) then
+      ao.briefed = true
+      msg("INTEL " .. D.aoThreats(ao))
+    end
+  end
+
   -- Nachschub
   if now >= D.nextSam then
-    D.nextSam = D.spawnSam() and (now + 5) or (now + 30)
+    local ok = D.spawnSam()
+    if ok and D.cfg.sam.spawnAll then
+      for _ = 1, 20 do if not D.spawnSam() then break end end
+    end
+    D.nextSam = ok and (now + 5) or (now + 30)
   end
   if D.cfg.cas.autoSpawn and now >= D.nextCas then
     D.nextCas = D.spawnCAS(false) and (now + randRange(D.cfg.cas.interval)) or (now + 60)
@@ -3773,6 +3795,9 @@ function D.update()
   end
   if D.cfg.deepStrike.enabled and D.cfg.deepStrike.autoSpawn and now >= D.nextDeep then
     D.nextDeep = D.spawnDeepStrike(false) and (now + randRange(D.cfg.deepStrike.autoInterval)) or (now + 120)
+  end
+  if D.cfg.battle.enabled and D.cfg.battle.autoSpawn and now >= D.nextBattle then
+    D.nextBattle = D.spawnBattle(false) and (now + randRange(D.cfg.battle.autoInterval)) or (now + 120)
   end
   if D.cfg.tic.enabled and D.cfg.tic.autoSpawn and now >= D.nextTic then
     D.nextTic = D.spawnTic(false) and (now + randRange(D.cfg.tic.autoInterval)) or (now + 120)
@@ -3817,6 +3842,7 @@ function D.start()
   D.nextConvoy = now + D.cfg.convoy.firstDelay
   D.nextDeep = now + D.cfg.deepStrike.firstDelay
   D.nextTic = now + D.cfg.tic.firstDelay
+  D.nextBattle = now + D.cfg.battle.firstDelay
   D.nextBomber = now + D.cfg.bomber.firstDelay
   D.nextCapRoll = now + randRange(D.cfg.cap.autoInterval)
 
@@ -3841,11 +3867,7 @@ function D.buildMenu()
   local info = sub(root, "Info")
   cmd(info, "Campaign: Status", D.reportCampaign)
   cmd(info, "Navigation: AO steerpoints", D.reportNav)
-  cmd(info, "SEAD: SITREP", D.reportSEAD)
-  if D.cfg.voice.enabled then
-    cmd(info, "Overlord: Request threat picture (voice)", D.voicePicture)
-  end
-  cmd(info, "Threats: MANPADS areas", D.reportManpads)
+  cmd(info, "Threats: SAMs & MANPADS per AO", D.reportThreats)
   cmd(info, "Support: AWACS & tankers", D.reportSupport)
   if D.cfg.farp.enabled then cmd(info, "Forward FARPs: status", D.farpStatus) end
   cmd(info, "Statistics", D.reportStats)
@@ -3888,9 +3910,14 @@ function D.buildMenu()
     cmd(sq, "Bomber: Request intercept tasking", D.requestBomber)
     cmd(sq, "Bomber: Status", D.reportBomber)
   end
+  if D.cfg.battle.enabled then
+    local bm = sub(sq, "Frontline Battle")
+    cmd(bm, "Start frontline battle", D.requestBattle)
+    cmd(bm, "Status", D.reportBattle)
+  end
   if D.cfg.tic.enabled then
-    cmd(sq, "TIC: Request troops-in-contact tasking", D.requestTic)
-    local jt = sub(sq, "JTAC")
+    local jt = sub(sq, "TIC / JTAC")
+    cmd(jt, "Request troops-in-contact tasking", D.requestTic)
     cmd(jt, "Situation report", D.reportTic)
     cmd(jt, "Friendlies: green smoke", function() D.ticMarkFriendly("green") end)
     cmd(jt, "Friendlies: orange smoke", function() D.ticMarkFriendly("orange") end)
@@ -4009,12 +4036,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.24 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.29 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.24 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.29 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
