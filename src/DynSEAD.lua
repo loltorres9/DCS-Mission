@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.22 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.23 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -3421,6 +3421,15 @@ function D.farpTestBuild()
 end
 
 -- Test 2: Client-Slot per Skript am Test-FARP erzeugen (taucht der Slot in der Slot-Liste auf?)
+-- Probiert mehrere Varianten (Land, Skill, Route) und meldet für jede das genaue Ergebnis.
+local function dumpErr(err)
+  if type(err) ~= "table" then return tostring(err) end
+  local parts = {}
+  for k, v in pairs(err) do parts[#parts + 1] = tostring(k) .. "=" .. tostring(v) end
+  table.sort(parts)
+  return "{" .. table.concat(parts, ", ") .. "}"
+end
+
 function D.farpTestSlot()
   local pos = D.farpTest and D.farpTest.pos
   if not pos then
@@ -3429,32 +3438,48 @@ function D.farpTestSlot()
     end
   end
   if not pos then msg("FARP TEST: No test FARP and no player found. Build the FARP first.") return end
-  if D.farpTestGroup then msg("FARP TEST: A test slot group already exists. Remove the test first.") return end
+  if D.farpTestGroups then msg("FARP TEST: Test slot groups already exist. Remove the test first.") return end
 
-  local gname = "FARPSLOT-1"
-  local x, y = pos.x + 20, pos.y + 20
-  local ok, err = pcall(coalition.addGroup, D.cfg.blueCountry, Group.Category.HELICOPTER, {
-    name = gname, task = "CAS", uncontrolled = false,
-    units = { { name = gname .. "-1", type = "AH-64D_BLK_II", skill = "Client", x = x, y = y, heading = 0,
-                alt = land.getHeight({ x = x, y = y }), alt_type = "BARO", speed = 0 } },
-    route = { points = { { x = x, y = y, alt = land.getHeight({ x = x, y = y }), alt_type = "BARO",
-                           type = "TakeOffGround", action = "From Ground Area", speed = 0,
-                           ETA = 0, ETA_locked = false, speed_locked = true,
-                           task = { id = "ComboTask", params = { tasks = {} } } } } },
-  })
-  local g = Group.getByName(gname)
-  if g and g:isExist() then D.farpTestGroup = gname end
-  local line = string.format("FARP TEST (client slot): group %s – %s",
-    gname, g and "created (AI-controlled until a player takes it)" or ("FAILED" .. (ok and "" or (" – " .. tostring(err)))))
-  env.info("DynSEAD " .. line)
-  msg(line .. "\nNow leave your aircraft to the slot list and check whether a new AH-64D slot \"" .. gname ..
-      "\" is offered. If it is, a script-built spawn point near the FARP is possible. Rejoining the server may be needed for the list to refresh.")
+  local variants = {
+    { tag = "A", country = country.id.USA,       skill = "Client", route = true,  note = "USA, skill Client, TakeOffGround" },
+    { tag = "B", country = D.cfg.blueCountry,    skill = "Client", route = true,  note = "CJTF_BLUE, skill Client" },
+    { tag = "C", country = country.id.USA,       skill = "Player", route = true,  note = "USA, skill Player" },
+    { tag = "D", country = country.id.USA,       skill = "Client", route = false, note = "USA, skill Client, no route" },
+  }
+  D.farpTestGroups = {}
+  local lines = {}
+  for i, v in ipairs(variants) do
+    local gname = "FARPSLOT-" .. v.tag
+    local x, y = pos.x + 20 * i, pos.y + 20
+    local h = land.getHeight({ x = x, y = y })
+    local data = {
+      name = gname, task = "CAS", uncontrolled = false,
+      units = { { name = gname .. "-1", type = "AH-64D_BLK_II", skill = v.skill, x = x, y = y, heading = 0,
+                  alt = h, alt_type = "BARO", speed = 0,
+                  payload = { pylons = {}, fuel = 1000, flare = 30, chaff = 30, gun = 100 } } },
+    }
+    if v.route then
+      data.route = { points = { { x = x, y = y, alt = h, alt_type = "BARO", type = "TakeOffGround",
+                                   action = "From Ground Area", speed = 0, ETA = 0, ETA_locked = false,
+                                   speed_locked = true, task = { id = "ComboTask", params = { tasks = {} } } } } }
+    end
+    local ok, err = pcall(coalition.addGroup, v.country, Group.Category.HELICOPTER, data)
+    local g = Group.getByName(gname)
+    local exists = g and g:isExist()
+    if exists then D.farpTestGroups[#D.farpTestGroups + 1] = gname end
+    lines[#lines + 1] = string.format("%s) %s: %s", v.tag, v.note,
+      exists and "created" or ("FAILED – " .. (ok and "no group exists afterwards" or dumpErr(err))))
+  end
+  local text = "FARP TEST (client slots):\n" .. table.concat(lines, "\n") ..
+    "\nNow check the slot list for new AH-64D slots named FARPSLOT-A … D (rejoining the server may be needed to refresh)."
+  env.info("DynSEAD " .. text:gsub("\n", " | "))
+  msg(text)
 end
 
 function D.farpTestRemove()
-  if D.farpTestGroup then
-    destroyGroup(D.farpTestGroup)
-    D.farpTestGroup = nil
+  if D.farpTestGroups then
+    for _, gn in ipairs(D.farpTestGroups) do destroyGroup(gn) end
+    D.farpTestGroups = nil
   end
   if not D.farpTest then msg("FARP TEST: Test group removed, no test FARP to remove.") return end
   for _, name in ipairs(D.farpTest.names) do
@@ -3837,12 +3862,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.22 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.23 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.22 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.23 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 

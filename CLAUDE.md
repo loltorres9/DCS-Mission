@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.22). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.22 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.23). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.23 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -104,16 +104,18 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
-8. **Ship Strike (v4.22)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+8. **Ship Strike (v4.23)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
    (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
    das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
-9. **Nebenaufträge (v4.22)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
+9. **Nebenaufträge (v4.23)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
    (Hauptbasis `RPC_5N62V`/`RLS_19J6`/`S-200_Launcher`/`S-300PS …`/`1L13 EWR`/`55G6 EWR`, Bomber `Tu-95MS`/`Tu-160`, `REACTION_ON_THREAT`, Konvoi, Deep-Strike-Statik `.Command Center`/`Warehouse`/`Tank`, TIC-Einheiten), `Spot.createInfraRed`/`createLaser`, Platzhalter-Koordinaten
    in `D.cfg.deepStrike.targets`. Logik wurde nur gegen einen DCS-Mock (lupa) getestet. Keine Sprachbausteine dafür.
-10. **Standortprüfung (v4.22)** ungetestet im Spiel: ob `world.searchObjects(Object.Category.SCENERY, …)` Bäume liefert (sonst nur Gebäude), Wirkung über die Zähler „siting checks“ in `dcs.log` prüfen.
-11. **FARP-Experiment (v4.22)**: Ziel ist ein von Transporthubschraubern gebauter Vorwärts-FARP, an dem man Kampfhubschrauber respawnen kann (spart den Überführungsflug).
+10. **Standortprüfung (v4.23)** ungetestet im Spiel: ob `world.searchObjects(Object.Category.SCENERY, …)` Bäume liefert (sonst nur Gebäude), Wirkung über die Zähler „siting checks“ in `dcs.log` prüfen.
+11. **FARP-Experiment (v4.23)**: Ziel ist ein von Transporthubschraubern gebauter Vorwärts-FARP, an dem man Kampfhubschrauber respawnen kann (spart den Überführungsflug).
     Unklar, ob DCS zur Laufzeit Spawn-Slots (Dynamic Spawn) und ein Lager an einem per Skript gebauten FARP erlaubt. Test: F10 DEBUG > „FARP test: build at first player“ (baut `FARP` + Tankdepot/Munition/Zelt
     an der Position des ersten Spielers, meldet Airbase-Objekt/Warehouse/`setItem`) und „FARP test: remove“. Ergebnis Test 1 (Nutzer, v4.21): Objekte, Helipads, Airbase-Objekt (Heliport, blau), Warehouse und `setItem` funktionieren, aber **kein** Dynamic-Spawn-Slot für den Skript-FARP.
-    Test 2 (v4.22): F10 DEBUG > „FARP test: spawn client slot at FARP“ erzeugt per `coalition.addGroup` eine AH-64D-Gruppe mit `skill = "Client"` (Start `TakeOffGround`) am FARP; prüfen, ob sie als Slot erscheint.
+    Test 2, erster Versuch (Nutzer, v4.22): `coalition.addGroup` mit `skill = "Client"` und Land CJTF_BLUE schlug fehl (Fehlerobjekt war eine Tabelle).
+    v4.23 probiert 4 Varianten (USA/CJTF, Client/Player, mit/ohne Route) und meldet die Fehler im Klartext.
+    Test 2 (v4.23): F10 DEBUG > „FARP test: spawn client slot at FARP“ erzeugt per `coalition.addGroup` eine AH-64D-Gruppe mit `skill = "Client"` (Start `TakeOffGround`) am FARP; prüfen, ob sie als Slot erscheint.
     Ergebnis abwarten, dann entscheiden: (a) frei platzierbar mit Respawn, (b) feste Editor-FARPs mit Dynamic Spawn,
     die ein Transporter per Lieferung freischaltet (`Airbase:setCoalition`, Warehouse-Bestand), (c) nur Versorgungs-FARP ohne Respawn. Typnamen der FARP-Objekte ungetestet.
