@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.25 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.26 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -70,7 +70,6 @@ D.cfg = {
     maxActive         = 12,        -- SAM-Stellungen gleichzeitig (gesamt, alle AOs)
     spawnAll          = true,      -- alle SAM-Stellungen einer AO erscheinen sofort beim Aktivieren (nicht nacheinander)
     showIntel         = false,     -- false = keine SAM-Standortinfos (keine Kartenmarker, keine ELINT-Meldungen, keine Peilungen im SITREP)
-    softKill          = 0.6,       -- SAM-Einheit wird zerstört, sobald ihre Lebenspunkte unter diesen Anteil fallen (Bordkanone hilft sonst kaum); 0 = aus
     respawnDelay      = {120, 300},
     minSeparation     = 12000,
     intelError        = 7000,      -- Start-Ungenauigkeit (m), wird per ELINT kleiner
@@ -3728,26 +3727,6 @@ function D.update()
     end
   end
 
-  -- Soft-Kill: stark beschädigte SAM-Einheiten gelten als zerstört
-  local sk = D.cfg.sam.softKill
-  if sk and sk > 0 then
-    for _, s in ipairs(D.sites) do
-      for _, gn in ipairs({ s.group, s.pdGroup }) do
-        local g = gn and Group.getByName(gn)
-        if g and g:isExist() then
-          for _, u in ipairs(g:getUnits() or {}) do
-            local ok, life, life0 = pcall(function() return u:getLife(), u:getLife0() end)
-            if ok and life and life0 and life0 > 0 and life > 0 and life / life0 < sk then
-              local p = u:getPoint()
-              pcall(function() u:destroy() end)
-              pcall(trigger.action.explosion, p, 50)
-            end
-          end
-        end
-      end
-    end
-  end
-
   -- AWACS / ELINT
   D.checkAwacs(now)
   D.checkTankers(now)
@@ -4041,12 +4020,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.25 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.26 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.25 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.26 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
