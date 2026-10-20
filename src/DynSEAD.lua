@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.40 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.41 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -70,6 +70,7 @@ D.cfg = {
   --   friendly      : weitere Flugplätze, die beim Start blau sind (kein Ziel)
   --   friendlyAreas : alle Flugplätze in diesen Lat/Lon-Rechtecken sind ebenfalls blau (kein Ziel)
   --   exclude       : Flugplätze, die weder blau noch Ziel sind
+  --   fronts        : mehrere Fronten mit je eigenen aktiven Zielen (ohne: eine Front, campaign.activeTargets)
   --   ignore        : Lua-Muster für Namen, die gar nicht als Flugplatz zählen (Syria meldet ~140 Hubschrauber-Landeplätze als Flugplatz)
   --   deepStrike    : Deep-Strike-Ziele (Platzhalter-Koordinaten)
   maps = {
@@ -85,6 +86,13 @@ D.cfg = {
       friendlyAreas = { { name = "Cyprus", latMin = 34.4, latMax = 35.8, lonMin = 32.0, lonMax = 34.8 } },
       exclude       = {},
       ignore        = { "^H[%a_]+%d+$", "Heliport" },   -- HS02, HMed01, H_med_orig_03, HOil01 …; nicht H3/H4
+      -- Fronten: jede Front hat eigene aktive Ziele und rückt von ihren Basen (plus eroberten Plätzen) aus vor
+      fronts = {
+        { name = "North", active = 2, bases = { "Incirlik", "Adana Sakirpasa", "Chukurova", "Hatay", "Gaziantep",
+                                                "Kahramanmaras", "Sanliurfa", "Adiyaman", "Gulechoba", "Diyarbakir" } },
+        { name = "South", active = 2, bases = { "King Hussein Air College", "Zarqa", "Ruwayshid", "H4", "H4 Emergency",
+                                                "Prince Hassan", "King Abdullah II", "Marka", "Muwaffaq Salti" } },
+      },
       deepStrike = {
         { name = "Command post near Damascus",      lat = 33.45, lon = 36.40, type = ".Command Center", category = "Fortifications" },
         { name = "Ammunition depot near Homs",      lat = 34.70, lon = 36.80, type = "Warehouse",       category = "Warehouses" },
@@ -3388,8 +3396,9 @@ function D.spawnGarrison(ao)
   ao.garrisonDone = false
 end
 
-function D.nextTarget()
+function D.nextTarget(front)
   D.refreshBlueBases()
+  local from = (front and #front.pos > 0) and front.pos or D.blueBases
   local best, bestD, bestIdx = nil, math.huge, nil
   local maxD = D.cfg.campaign.maxDistance
   local sep = D.cfg.campaign.aoSeparation or 0
@@ -3398,7 +3407,7 @@ function D.nextTarget()
     if ab then
       local p = toV2(ab:getPoint())
       local d = math.huge
-      for _, b in ipairs(D.blueBases) do d = math.min(d, dist(p, b)) end
+      for _, b in ipairs(from) do d = math.min(d, dist(p, b)) end
       local apart = true   -- Kreise bereits aktiver AOs (auch im Abschluss) dürfen nicht überlappen
       for _, ao in ipairs(D.aos) do
         if dist(p, ao) < sep then apart = false break end
@@ -3411,7 +3420,7 @@ function D.nextTarget()
   return best
 end
 
-function D.activateAirbaseAO(name)
+function D.activateAirbaseAO(name, front)
   local c = D.cfg.campaign
   local ab = Airbase.getByName(name)
   if not ab then return end
@@ -3420,7 +3429,7 @@ function D.activateAirbaseAO(name)
     name = name, airbase = name, x = p.x, y = p.y, radius = c.aoRadius,
     samLeft = math.random(c.samPerAO[1], c.samPerAO[2]),
     casLeft = math.random(c.casPerAO[1], c.casPerAO[2]),
-    samActive = 0, casActive = 0, state = "active",
+    samActive = 0, casActive = 0, state = "active", front = front,
   }
   if c.garrison then D.spawnGarrison(ao) end
   drawAO(ao)
@@ -3432,16 +3441,30 @@ function D.activateAirbaseAO(name)
   D.nextCas = math.min(D.nextCas, now + (D.cfg.cas.spawnAll and 5 or D.cfg.cas.firstDelay))
 
   D.say({ "new_objective", tPlace(name), "airfield", tBE(p) })
-  msg(string.format("NEW OBJECTIVE: %s airfield\nDestroy: %d SAM site(s), %d CAS target(s)%s\nPosition: %s",
-    name, ao.samLeft, ao.casLeft, ao.garrison and ", airfield garrison" or "", D.fmtPos(p)))
+  msg(string.format("NEW OBJECTIVE%s: %s airfield\nDestroy: %d SAM site(s), %d CAS target(s)%s\nPosition: %s",
+    front and (" (" .. front.name .. " front)") or "", name, ao.samLeft, ao.casLeft,
+    ao.garrison and ", airfield garrison" or "", D.fmtPos(p)))
   D.spawnManpadsZones(ao)
 end
 
 function D.activateNext()
-  while #D.aos < D.cfg.campaign.activeTargets do
-    local name = D.nextTarget()
-    if not name then break end
-    D.activateAirbaseAO(name)
+  if D.fronts then
+    for _, f in ipairs(D.fronts) do
+      local n = 0
+      for _, ao in ipairs(D.aos) do if ao.front == f then n = n + 1 end end
+      while n < f.active do
+        local name = D.nextTarget(f)
+        if not name then break end
+        D.activateAirbaseAO(name, f)
+        n = n + 1
+      end
+    end
+  else
+    while #D.aos < D.cfg.campaign.activeTargets do
+      local name = D.nextTarget()
+      if not name then break end
+      D.activateAirbaseAO(name)
+    end
   end
   if #D.aos == 0 then
     if D.fortress and D.fortress.state == "active" then
@@ -3471,6 +3494,7 @@ function D.captureAO(ao)
     if a == ao then table.remove(D.aos, i) break end
   end
   D.capturedCount = D.capturedCount + 1
+  if ao.front then ao.front.pos[#ao.front.pos + 1] = { x = ao.x, y = ao.y, name = ao.name } end
   D.refreshBlueBases()
   D.say({ tPlace(ao.name), "airfield", "now_friendly" })
   msg(string.format("%s airfield is now under BLUE control! (%d/%d captured)\nSpawning available there.",
@@ -3876,7 +3900,7 @@ function D.reportCampaign()
   local lines = { string.format("CAMPAIGN: %d/%d airfields captured", D.capturedCount, D.targetsTotal) }
   for _, ao in ipairs(D.aos) do
     lines[#lines + 1] = string.format("• %s%s\n   SAM left: %d | CAS left: %d | Garrison: %s\n   %s",
-      ao.name, ao.state == "capturing" and " (capture in progress)" or "",
+      ao.name .. (ao.front and (" – " .. ao.front.name .. " front") or ""), ao.state == "capturing" and " (capture in progress)" or "",
       ao.samLeft + ao.samActive, ao.casLeft + ao.casActive,
       ao.garrison and (ao.garrisonDone and "neutralized" or "active") or "–",
       D.fmtPos({ x = ao.x, y = ao.y }))
@@ -4263,6 +4287,19 @@ local function init()
   env.info("DynSEAD: theatre " .. D.theatre)
   local ok
   if D.cfg.mode == "airbases" then ok = initAirbases() else ok = initZones() end
+  if ok and D.cfg.mode == "airbases" and D.map.fronts then
+    D.fronts = {}
+    for _, fc in ipairs(D.map.fronts) do
+      local f = { name = fc.name, active = fc.active or 1, pos = {} }
+      for _, n in ipairs(fc.bases or {}) do
+        local ab = Airbase.getByName(n)
+        if ab then local p = toV2(ab:getPoint()); p.name = n; f.pos[#f.pos + 1] = p
+        else env.warning("DynSEAD: front " .. f.name .. ": airfield not found: " .. n) end
+      end
+      if #f.pos > 0 then D.fronts[#D.fronts + 1] = f end
+    end
+    if #D.fronts == 0 then D.fronts = nil end
+  end
   if not ok then return end
   D.refreshBlueBases()
   if D.cfg.mode == "airbases" then D.reserveFortress() end
@@ -4271,12 +4308,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.40 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.41 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.40 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.41 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
