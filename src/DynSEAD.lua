@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.17 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.20 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -315,6 +315,24 @@ D.cfg = {
     autoMarkRange  = 12000,        -- Verbündete markieren sich automatisch, sobald ein Spieler so nah kommt (m)
     laserCode      = 1688,
     cleanupAfter   = 600,
+  },
+
+  siting = {
+    enabled        = true,
+    sceneryRadius  = 150,          -- Radarstandorte mindestens so weit (m) von Szenerie-Objekten (Gebäude, Masten, ggf. Bäume) entfernt
+    noZonePrefix   = "NOSAM",      -- Editor-Trigger-Zonen mit diesem Namensanfang (z. B. über Wäldern) sind für SAMs/Radare gesperrt
+    -- Gelände: nicht an steilen Hängen, nicht in Kesseln/Tälern mit hohen Bergen ringsum
+    slopeRadius    = 150,          -- Hangneigung wird auf diesem Radius (m) in 8 Richtungen gemessen
+    maxSlopeDeg    = 6,            -- steilere Standorte werden abgelehnt
+    horizonDist    = {1500, 3000, 5000},  -- Abstände (m), in denen der Horizont in 8 Richtungen geprüft wird
+    antennaHeight  = 15,           -- Höhe der Radarantenne über Grund (m)
+    maxHorizonDeg  = 6,            -- Gelände höher als dieser Erhebungswinkel blockiert die Richtung
+    maxBlockedDirs = 3,            -- ab so vielen blockierten Richtungen (von 8) wird der Standort abgelehnt
+    -- Bebauung: nicht zwischen vielen/hohen Gebäuden
+    urbanRadius    = 400,          -- ab urbanMax Szenerie-Objekten in diesem Radius (m) gilt der Ort als Stadt
+    urbanMax       = 10,
+    tallHeight     = 12,           -- Objekte mindestens so hoch (m) zählen als Hochhaus ...
+    tallRadius     = 300,          -- ... und sperren den Standort im Umkreis (m)
   },
 
   fortress = {
@@ -820,9 +838,95 @@ local function randomPointInZone(z, margin)
   return { x = z.x + r * math.cos(a), y = z.y + r * math.sin(a) }
 end
 
+-- Standortprüfung für SAMs/Radare: nicht in gesperrten Zonen, nicht direkt neben Gebäuden/Bäumen.
+-- DCS bietet keine direkte Wald-Abfrage; erkannt wird, was world.searchObjects(SCENERY) liefert (Gebäude, Masten, evtl. Bäume),
+-- großflächige Wälder sperrt man mit Trigger-Zonen "NOSAM*" im Editor. Wirkt nur im ersten Durchlauf von findSpot (weich).
+D.siting = { tested = 0, scenery = 0, zone = 0, slope = 0, horizon = 0, urban = 0, apiFailed = false, noZones = nil }
+
+function D.samSpotClear(p)
+  local c = D.cfg.siting
+  if not c or not c.enabled then return true end
+  local st = D.siting
+  st.tested = st.tested + 1
+
+  if st.noZones == nil then
+    st.noZones = {}
+    local mz = env.mission and env.mission.triggers and env.mission.triggers.zones or {}
+    for _, z in pairs(mz) do
+      if type(z) == "table" and z.name and z.name:sub(1, #c.noZonePrefix) == c.noZonePrefix then
+        local tz = trigger.misc.getZone(z.name)
+        if tz and tz.radius and tz.radius > 0 then
+          st.noZones[#st.noZones + 1] = { x = tz.point.x, y = tz.point.z, r = tz.radius }
+        end
+      end
+    end
+  end
+  for _, z in ipairs(st.noZones) do
+    if dist(p, z) < z.r then st.zone = st.zone + 1 return false end
+  end
+
+  -- Gelände: Hangneigung und Horizont (Berge ringsum verdecken das Radar)
+  local h0 = land.getHeight(p)
+  local maxSlope = 0
+  for k = 0, 7 do
+    local q = offset(p, k * math.pi / 4, c.slopeRadius)
+    maxSlope = math.max(maxSlope, math.abs(land.getHeight(q) - h0) / c.slopeRadius)
+  end
+  if math.deg(math.atan(maxSlope)) > c.maxSlopeDeg then st.slope = st.slope + 1 return false end
+  local blocked = 0
+  for k = 0, 7 do
+    local a = k * math.pi / 4
+    for _, d in ipairs(c.horizonDist) do
+      local dh = land.getHeight(offset(p, a, d)) - h0 - c.antennaHeight
+      if dh > 0 and math.deg(math.atan(dh / d)) > c.maxHorizonDeg then blocked = blocked + 1 break end
+    end
+  end
+  if blocked >= c.maxBlockedDirs then st.horizon = st.horizon + 1 return false end
+
+  -- Szenerie: direkt neben Gebäuden, zwischen vielen oder hohen Gebäuden
+  local v3 = toV3(p)
+  local found = false
+  local ok, err = pcall(function()
+    world.searchObjects(Object.Category.SCENERY,
+      { id = world.VolumeType.SPHERE, params = { point = v3, radius = c.sceneryRadius } },
+      function() found = true return false end)
+  end)
+  if not ok then
+    if not st.apiFailed then
+      st.apiFailed = true
+      env.warning("DynSEAD: scenery search not available, siting check limited to terrain and NOSAM zones: " .. tostring(err))
+    end
+    return true
+  end
+  if found then st.scenery = st.scenery + 1 return false end
+
+  local wide = math.max(c.urbanRadius, c.tallRadius)
+  local count, tall = 0, false
+  pcall(function()
+    world.searchObjects(Object.Category.SCENERY,
+      { id = world.VolumeType.SPHERE, params = { point = v3, radius = wide } },
+      function(obj)
+        local okp, op = pcall(function() return obj:getPoint() end)
+        local d = okp and op and dist(toV2(op), p) or wide
+        if d <= c.urbanRadius then count = count + 1 end
+        if d <= c.tallRadius then
+          local okd, desc = pcall(function() return obj:getDesc() end)
+          if okd and desc and desc.box and desc.box.max and desc.box.min
+             and (desc.box.max.y - desc.box.min.y) >= c.tallHeight then
+            tall = true
+            return false
+          end
+        end
+        return true
+      end)
+  end)
+  if tall or count >= c.urbanMax then st.urban = st.urban + 1 return false end
+  return true
+end
+
 D.safeZones = {}   -- { x, y, r }: im ersten Durchlauf von findSpot (SAM/CAS/CAP) gemieden
 
-function D.findSpot(aos, avoid, sep)
+function D.findSpot(aos, avoid, sep, check)
   if #aos == 0 then return nil end
   local players = playerPositions()
   for pass = 1, 2 do
@@ -839,7 +943,8 @@ function D.findSpot(aos, avoid, sep)
       if safe and okGround(p)
         and farFrom(p, players, D.cfg.minDistPlayers * f)
         and farFrom(p, D.blueBases, D.cfg.minDistBlueBase * f)
-        and farFrom(p, avoid, (sep or 0) * f) then
+        and farFrom(p, avoid, (sep or 0) * f)
+        and (pass ~= 1 or not check or check(p)) then
         return p, z
       end
     end
@@ -932,7 +1037,7 @@ function D.spawnSam()
 
   local avoid = {}
   for _, s in ipairs(D.sites) do avoid[#avoid + 1] = s.pos end
-  local p, ao = D.findSpot(aos, avoid, D.cfg.sam.minSeparation)
+  local p, ao = D.findSpot(aos, avoid, D.cfg.sam.minSeparation, D.samSpotClear)
   if not p then
     env.warning("DynSEAD: no valid SAM position found")
     return false
@@ -988,6 +1093,9 @@ function D.createSam(ao, key, p, errMax, quiet, forceMode)
     D.setRadar(site, site.mode ~= "ambush")
   end, "Radar"), nil, now + 3)
 
+  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
+    key, D.siting.tested, D.siting.scenery, D.siting.urban, D.siting.slope, D.siting.horizon, D.siting.zone,
+    D.siting.apiFailed and " (scenery search unavailable)" or ""))
   if not quiet then
     D.say({ "all_players", "new_threat", tSam(key), tBE(site.intelPos), tDist(site.err), "area", tPlace(ao.name) })
     msg(string.format("INTEL [%s]: New threat reported – %s.\nApprox. position (±%s): %s",
@@ -1016,7 +1124,7 @@ function D.startRelocation(s)
   for _ = 1, 40 do
     local q = offset(cur, math.random() * 2 * math.pi, randRange(cfg.distance))
     if okGround(q) and farFrom(q, D.blueBases, D.cfg.minDistBlueBase)
-       and dist(q, center) <= s.ao.radius then
+       and dist(q, center) <= s.ao.radius and D.samSpotClear(q) then
       dest = q
       break
     end
@@ -2919,7 +3027,7 @@ function D.activateFortress(manual)
         for _ = 1, 150 do
           local q = offset(c.p, math.random() * 2 * math.pi, randRange(layer.dist))
           local ok = (pass == 1) and okGround(q) or (land.getSurfaceType(q) == land.SurfaceType.LAND)
-          if ok and farFrom(q, placed, layer.sep * ((pass == 1) and 1 or 0.5)) then p = q break end
+          if ok and farFrom(q, placed, layer.sep * ((pass == 1) and 1 or 0.5)) and (pass ~= 1 or D.samSpotClear(q)) then p = q break end
         end
         if p then break end
       end
@@ -3250,6 +3358,79 @@ function D.debugMapToggle()
 end
 
 -------------------------------------------------------------------------------
+-- EXPERIMENT: per Skript gebauter FARP (klärt, ob DCS dort Lager und Spawn-Plätze zur Laufzeit erlaubt)
+-------------------------------------------------------------------------------
+D.farpTest = nil
+
+function D.farpTestBuild()
+  if D.farpTest then msg("FARP TEST: A test FARP already exists. Remove it first.") return end
+  local u
+  for _, pu in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+    if pu and pu:isExist() then u = pu break end
+  end
+  if not u then msg("FARP TEST: No player unit found. Spawn in first, then land where the FARP should be.") return end
+
+  local p = toV2(u:getPoint())
+  local base = "FARPTEST"
+  local names, lines = {}, {}
+  local function add(kind, suffix, typ, category, ox, oy, extra)
+    local name = suffix and (base .. "-" .. suffix) or base
+    local def = { name = name, type = typ, category = category, x = p.x + ox, y = p.y + oy,
+                  heading = 0, canCrash = false }
+    for k, v in pairs(extra or {}) do def[k] = v end
+    local ok, err = pcall(coalition.addStaticObject, D.cfg.blueCountry, def)
+    local exists = StaticObject.getByName(name) ~= nil
+    if exists then names[#names + 1] = name end
+    lines[#lines + 1] = string.format("- %s (%s): %s", kind, typ, exists and "created" or ("FAILED" .. (ok and "" or (" – " .. tostring(err)))))
+    return exists
+  end
+
+  add("FARP", nil, "FARP", "Heliports", 0, 0,
+      { shape_name = "FARPS", heliport_callsign_id = 1, heliport_frequency = "127.5", heliport_modulation = 0 })
+  add("Fuel depot", "FUEL", "FARP Fuel Depot", "Fortifications", 28, 0)
+  add("Ammo dump", "AMMO", "FARP Ammo Dump Coating", "Fortifications", 0, 28)
+  add("Tent", "TENT", "FARP Tent", "Fortifications", -28, 0)
+
+  -- Was weiß DCS über den neuen Platz?
+  local ab = Airbase.getByName(base)
+  if ab then
+    local cat, side = "?", "?"
+    pcall(function() cat = tostring(ab:getDesc().category) end)
+    pcall(function() side = tostring(ab:getCoalition()) end)
+    lines[#lines + 1] = string.format("- Airbase object \"%s\": found (category %s, coalition %s)", base, cat, side)
+    local wh
+    pcall(function() wh = ab:getWarehouse() end)
+    if wh then
+      lines[#lines + 1] = "- Warehouse: available"
+      local ok, err = pcall(function() wh:setItem("AH-64D_BLK_II", 4) end)
+      local count = "?"
+      pcall(function() count = tostring(wh:getItemCount("AH-64D_BLK_II")) end)
+      lines[#lines + 1] = string.format("- Stock AH-64D_BLK_II set to 4: %s (reads back: %s)", ok and "OK" or ("FAILED – " .. tostring(err)), count)
+    else
+      lines[#lines + 1] = "- Warehouse: NOT available"
+    end
+  else
+    lines[#lines + 1] = "- Airbase object: NOT found (DCS does not treat the FARP as an airbase)"
+  end
+
+  D.farpTest = { names = names, pos = p }
+  local text = "FARP TEST at " .. D.fmtPos(p) .. "\n" .. table.concat(lines, "\n") ..
+    "\nNext: open the slot/respawn menu and check whether \"" .. base .. "\" is offered. Also land a helicopter here and ask ground crew for rearm and refuel."
+  env.info("DynSEAD " .. text:gsub("\n", " | "))
+  msg(text)
+end
+
+function D.farpTestRemove()
+  if not D.farpTest then msg("FARP TEST: No test FARP to remove.") return end
+  for _, name in ipairs(D.farpTest.names) do
+    local o = StaticObject.getByName(name)
+    if o then pcall(function() o:destroy() end) end
+  end
+  D.farpTest = nil
+  msg("FARP TEST: Test FARP removed.")
+end
+
+-------------------------------------------------------------------------------
 -- BERICHTE
 -------------------------------------------------------------------------------
 function D.voicePicture()
@@ -3514,6 +3695,8 @@ function D.buildMenu()
   if D.cfg.debugMenu then
     local dbg = sub(root, "DEBUG")
     cmd(dbg, "Show all units on map (on/off)", D.debugMapToggle)
+    cmd(dbg, "FARP test: build at first player", D.farpTestBuild)
+    cmd(dbg, "FARP test: remove", D.farpTestRemove)
     if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
   end
@@ -3618,12 +3801,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.17 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.20 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.17 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.20 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
