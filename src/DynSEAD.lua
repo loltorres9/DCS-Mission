@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.39 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.40 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -67,15 +67,24 @@ D.cfg = {
 
   -- Kartenspezifische Einstellungen; gewählt nach env.mission.theatre. Überschreiben die allgemeinen Werte.
   --   homeBases     : Flugplätze, die beim Start blau gesetzt werden
+  --   friendly      : weitere Flugplätze, die beim Start blau sind (kein Ziel)
   --   friendlyAreas : alle Flugplätze in diesen Lat/Lon-Rechtecken sind ebenfalls blau (kein Ziel)
   --   exclude       : Flugplätze, die weder blau noch Ziel sind
+  --   ignore        : Lua-Muster für Namen, die gar nicht als Flugplatz zählen (Syria meldet ~140 Hubschrauber-Landeplätze als Flugplatz)
   --   deepStrike    : Deep-Strike-Ziele (Platzhalter-Koordinaten)
   maps = {
     Caucasus = {},                 -- Startbasis kommt aus dem Editor (Senaki-Kolkhi blau)
     Syria = {
       homeBases     = { "Incirlik" },
+      friendly      = { -- Türkei (die Front läuft von Incirlik nach Süden)
+                        "Adana Sakirpasa", "Chukurova", "Hatay", "Gaziantep", "Kahramanmaras", "Sanliurfa", "Adiyaman",
+                        "Gulechoba", "Diyarbakir", "Konya", "Gazipasa",
+                        -- Jordanien
+                        "King Hussein Air College", "Zarqa", "Ruwayshid", "H4", "H4 Emergency", "Prince Hassan",
+                        "King Abdullah II", "Marka", "Muwaffaq Salti" },
       friendlyAreas = { { name = "Cyprus", latMin = 34.4, latMax = 35.8, lonMin = 32.0, lonMax = 34.8 } },
       exclude       = {},
+      ignore        = { "^H[%a_]+%d+$", "Heliport" },   -- HS02, HMed01, H_med_orig_03, HOil01 …; nicht H3/H4
       deepStrike = {
         { name = "Command post near Damascus",      lat = 33.45, lon = 36.40, type = ".Command Center", category = "Fortifications" },
         { name = "Ammunition depot near Homs",      lat = 34.70, lon = 36.80, type = "Warehouse",       category = "Warehouses" },
@@ -797,10 +806,20 @@ function D.fmtPos(p)
   return string.format("%s | %s | %s | %d ft", bullseyeStr(p), mgrs, ll, elev)
 end
 
+-- Hubschrauber-Landeplätze, die die Karte als Flugplatz meldet (D.map.ignore), zählen nirgends mit
+function D.ignoredBase(ab)
+  local ok, name = pcall(function() return ab:getName() end)
+  if not ok or not name then return true end
+  for _, pat in ipairs((D.map and D.map.ignore) or {}) do
+    if name:find(pat) then return true end
+  end
+  return false
+end
+
 function D.refreshBlueBases()
   D.blueBases = {}
   for _, ab in ipairs(world.getAirbases() or {}) do
-    if ab:getCoalition() == D.cfg.blueSide then
+    if ab:getCoalition() == D.cfg.blueSide and not D.ignoredBase(ab) then
       local p = toV2(ab:getPoint())
       p.name = ab:getName()
       D.blueBases[#D.blueBases + 1] = p
@@ -2016,7 +2035,7 @@ function D.findSeaSpot()
   local bases = {}
   for _, ab in ipairs(world.getAirbases() or {}) do
     local desc = ab:getDesc()
-    if desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() ~= D.cfg.blueSide then
+    if desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() ~= D.cfg.blueSide and not D.ignoredBase(ab) then
       bases[#bases + 1] = toV2(ab:getPoint())
     end
   end
@@ -2198,7 +2217,7 @@ local function redAirbases()
   local out = {}
   for _, ab in ipairs(world.getAirbases() or {}) do
     local desc = ab:getDesc()
-    if desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() ~= D.cfg.blueSide then
+    if desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() ~= D.cfg.blueSide and not D.ignoredBase(ab) then
       local p = toV2(ab:getPoint())
       p.name = ab:getName()
       out[#out + 1] = p
@@ -4186,6 +4205,7 @@ local function initAirbases()
   local homes = {}
   if c.homeBase then homes[#homes + 1] = c.homeBase end
   for _, n in ipairs(map.homeBases or {}) do homes[#homes + 1] = n end
+  for _, n in ipairs(map.friendly or {}) do homes[#homes + 1] = n end
   for _, n in ipairs(homes) do
     local hb = Airbase.getByName(n)
     if hb then hb:setCoalition(D.cfg.blueSide) else env.warning("DynSEAD: home base not found: " .. n) end
@@ -4199,9 +4219,9 @@ local function initAirbases()
   local home, targets = {}, {}
   for _, ab in ipairs(world.getAirbases() or {}) do
     local desc = ab:getDesc()
-    if desc and desc.category == Airbase.Category.AIRDROME then
+    local name = ab:getName()
+    if desc and desc.category == Airbase.Category.AIRDROME and not D.ignoredBase(ab) then
       pcall(function() ab:autoCapture(false) end)
-      local name = ab:getName()
       if ab:getCoalition() == D.cfg.blueSide then
         home[#home + 1] = name
       elseif not excluded[name] then
@@ -4251,12 +4271,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.39 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.40 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.39 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.40 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 

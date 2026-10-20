@@ -4,7 +4,7 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
 
   python tools/miz_tool.py info      MISSION.miz
   python tools/miz_tool.py embed     MISSION.miz src/DynSEAD.lua            [-o OUT.miz]
-  python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [-o OUT.miz]
+  python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [--keep] [-o OUT.miz]   (Caucasus, Syria)
   python tools/miz_tool.py options   MISSION.miz optionsView=optview_all --forced [-o OUT.miz]
   python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio [1-3]] [-o OUT.miz]
 
@@ -14,7 +14,7 @@ Benötigt nur Python 3 (voice zusätzlich ffmpeg im PATH).
 import argparse, copy, io, math, os, re, shutil, subprocess, sys, tempfile, wave, zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from luatable import parse, dump
-from geo import ll_to_dcs, AIRFIELDS
+from geo import ll_to_dcs, AIRFIELDS, SYRIA_AIRFIELDS
 
 MAIN_SCRIPT_PREFIX = "DynSEAD"          # eingebettetes Hauptskript: DynSEAD_vX.Y.lua
 VOICE_INDEX = "DynSEAD_voice.lua"
@@ -62,10 +62,19 @@ def blue_groups(m):
             for g in c.get(cat, {}).get("group", {}).values():
                 yield c, cat, g
 
-def campaign_order(home):
-    pos = {i: ll_to_dcs(la, lo) for i, (n, la, lo) in AIRFIELDS.items()}
+def airfield_table(th):
+    """{id: (name, x, y)} für die Karte; Caucasus aus Lat/Lon berechnet, Syria aus dem DCS-Log"""
+    if th == "Caucasus":
+        return {i: (n,) + ll_to_dcs(la, lo) for i, (n, la, lo) in AIRFIELDS.items()}
+    if th == "Syria":
+        return dict(SYRIA_AIRFIELDS)
+    return {}
+
+def campaign_order(home, table):
+    pos = {i: (x, y) for i, (n, x, y) in table.items()}
     d = lambda a, b: math.hypot(pos[a][0] - pos[b][0], pos[a][1] - pos[b][1])
-    blue, todo, order = set(home), set(AIRFIELDS) - set(home), []
+    home = [h for h in home if h in pos]
+    blue, todo, order = set(home), set(pos) - set(home), []
     while todo:                                  # wie D.nextTarget() im Skript: nächster zu einer blauen Basis
         nxt = min(todo, key=lambda t: min(d(t, b) for b in blue))
         order.append(nxt); blue.add(nxt); todo.remove(nxt)
@@ -82,9 +91,10 @@ def cmd_info(a):
         if v.endswith(".lua"): print("   %s -> %s" % (k, v))
     print("Trigger beim Start:", m["trig"]["actions"].get(1))
     print("\nFlugplätze:")
-    known = theatre(miz) == "Caucasus"           # Namentabelle (geo.py) gibt es nur für Caucasus
+    table = airfield_table(theatre(miz))
     for i, ap in sorted(w["airports"].items()):
-        name = AIRFIELDS.get(i, ("?",))[0] if known else "?"
+        if theatre(miz) == "Syria" and i not in table: continue   # Hubschrauber-Landeplätze ausblenden
+        name = table.get(i, ("?",))[0]
         links = []
         for cat in ("planes", "helicopters"):
             for t, e in ap["aircrafts"][cat].items():
@@ -117,27 +127,29 @@ TYPES = [  # typ, Kategorie, Gruppen-Task, Land(id,name), Höhe m, Höhentyp, Sp
     ("A-10C_2",       "planes",      "CAS",           (2, "USA"),     4572, "BARO",  150.0,  20, 5029, "A-10C II"),
     ("AJS37",         "planes",      "Ground Attack", (46, "Sweden"), 3000, "BARO",  220.97,  9, 4476, "AJS-37"),
     ("AH-64D_BLK_II", "helicopters", "CAS",           (2, "USA"),      150, "RADIO",  55.0,  10, 1438, "AH-64D"),
+    ("CH-47Fbl1",     "helicopters", "Transport",     (2, "USA"),      150, "RADIO",  60.0,  10, 3600, "CH-47F"),   # nur, wenn das Lager den Typ führt
 ]
 
 def cmd_templates(a):
     miz = Miz(a.miz)
-    if theatre(miz) != "Caucasus": sys.exit("Koordinatentabelle (tools/geo.py) gibt es bisher nur für Caucasus")
+    table = airfield_table(theatre(miz))
+    if not table: sys.exit("Keine Flugplatztabelle (tools/geo.py) für Karte %s" % theatre(miz))
     m, w = miz.table("mission"), miz.table("warehouses")
     dic = miz.table("l10n/DEFAULT/dictionary")
     base = [g for _, _, g in blue_groups(m) if g["name"] == a.base]
     if not base: sys.exit("Basis-Vorlage '%s' nicht gefunden" % a.base)
     base = copy.deepcopy(base[0])
     home = [i for i, ap in w["airports"].items() if ap.get("coalition", "").upper() == "BLUE"]
-    order, pos = campaign_order(home)
-    name = {i: n for i, (n, la, lo) in AIRFIELDS.items()}
+    order, pos = campaign_order(home, table)
+    name = {i: v[0] for i, v in table.items()}
 
-    # alte Vorlagen entfernen (alle blauen Gruppen mit dynSpawnTemplate)
-    for c in m["coalition"]["blue"]["country"].values():
+    # alte Vorlagen entfernen (alle blauen Gruppen mit dynSpawnTemplate); --keep: behalten, belegte Plätze überspringen
+    for c in ([] if a.keep else m["coalition"]["blue"]["country"].values()):
         for cat in ("plane", "helicopter"):
             grp = c.get(cat, {}).get("group", {})
             keep = [g for g in grp.values() if not g.get("dynSpawnTemplate")]
             if cat in c: c[cat]["group"] = {i + 1: g for i, g in enumerate(keep)}
-    for ap in w["airports"].values():
+    for ap in ([] if a.keep else w["airports"].values()):
         for cat in ("planes", "helicopters"):
             for e in ap["aircrafts"][cat].values(): e.pop("linkDynTempl", None)
 
@@ -157,9 +169,9 @@ def cmd_templates(a):
     for (typ, cat, task, (cid, cname), alt, alt_type, spd, maxwp, fuel, label) in TYPES:
         if a.types and label not in a.types and typ not in a.types: continue
         bucket = country(cid, cname).setdefault("plane" if cat == "planes" else "helicopter", {}).setdefault("group", {})
-        for af in sorted(AIRFIELDS):
+        for af in sorted(table):
             entry = w["airports"].get(af, {}).get("aircrafts", {}).get(cat, {}).get(typ)
-            if not entry: continue
+            if not entry or "linkDynTempl" in entry: continue
             gid += 1; uid += 1
             g = copy.deepcopy(base); u = g["units"][1]; sp = g["route"]["points"][1]
             x, y = pos[af]
@@ -305,6 +317,7 @@ if __name__ == "__main__":
     s = sp.add_parser("embed");     s.add_argument("miz"); s.add_argument("lua"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_embed)
     s = sp.add_parser("templates"); s.add_argument("miz"); s.add_argument("--base", required=True)
     s.add_argument("--types", nargs="*", help="Labels/Typen, z.B. F-16 A-10C_2 (Standard: alle)")
+    s.add_argument("--keep", action="store_true", help="vorhandene Vorlagen behalten, nur fehlende ergänzen")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
     s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all; mit --forced entfernt KEY= den Eintrag"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")
