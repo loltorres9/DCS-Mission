@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.23 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.24 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -352,6 +352,25 @@ D.cfg = {
     guards         = { "ZSU-23-4 Shilka", "ZSU-23-4 Shilka", "Strela-10M3", "Strela-10M3", "ZU-23 Emplacement", "ZU-23 Emplacement" },
     garrison       = true,
     manpads        = true,
+  },
+
+  farp = {
+    enabled        = true,
+    maxFarps       = 3,            -- gleichzeitig bestehende Vorwärts-FARPs
+    slotsPerFarp   = 4,            -- Kampfhubschrauber-Slots je Lieferung (Vorrat)
+    types          = { "AH-64D_BLK_II" },   -- Typen der Slots (reihum); muss zum Land passen
+    country        = country.id.USA,        -- Land der Slot-Gruppen (Skill "Client" lehnt DCS bei Skript-Gruppen ab, "Player" geht)
+    padOffset      = 60,           -- FARP-Mitte so weit (m) nördlich des gelandeten Transporters
+    slotOffset     = 18,           -- Abstand der Slots zur FARP-Mitte (m)
+    resupplyRadius = 250,          -- Lieferung innerhalb dieses Radius (m) füllt den nächsten FARP auf
+    minSeparation  = 1500,         -- Mindestabstand zwischen zwei FARPs (m)
+    maxSpeed       = 1.5,          -- m/s: so langsam muss der Transporter stehen
+    cooldown       = 300,          -- s zwischen zwei Lieferungen an denselben FARP
+    -- Bewaffnung der Slots. Leere pylons = unbewaffnet. Wird in einer AH-64D-Vorlage der Mission (Dynamic Spawn)
+    -- Bewaffnung eingestellt, übernehmen die FARP-Slots sie automatisch; sonst zählt dieser Eintrag (CLSIDs aus dem Editor).
+    payloads = {
+      ["AH-64D_BLK_II"] = { pylons = {}, fuel = 1438, flare = 45, chaff = 90, gun = 100 },
+    },
   },
 
   bomber = {
@@ -3358,70 +3377,22 @@ function D.debugMapToggle()
 end
 
 -------------------------------------------------------------------------------
--- EXPERIMENT: per Skript gebauter FARP (klärt, ob DCS dort Lager und Spawn-Plätze zur Laufzeit erlaubt)
+-- VORWÄRTS-FARP: Ein gelandeter Hubschrauber liefert Nachschub, danach spawnen dort Kampfhubschrauber.
+-- Der FARP besteht aus Skript-Objekten (Landeplatz, Tank, Munition, Zelt, vom Test bestätigt) und je einer Skript-Gruppe mit
+-- Skill "Player" pro Slot (taucht in der Slot-Liste auf, vom Test bestätigt).
 -------------------------------------------------------------------------------
-D.farpTest = nil
+D.farps = {}
+D.farpCounter = 0
+D.farpMenus = {}
+D.farpTemplatePayload = nil
 
-function D.farpTestBuild()
-  if D.farpTest then msg("FARP TEST: A test FARP already exists. Remove it first.") return end
-  local u
-  for _, pu in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
-    if pu and pu:isExist() then u = pu break end
-  end
-  if not u then msg("FARP TEST: No player unit found. Spawn in first, then land where the FARP should be.") return end
-
-  local p = toV2(u:getPoint())
-  local base = "FARPTEST"
-  local names, lines = {}, {}
-  local function add(kind, suffix, typ, category, ox, oy, extra)
-    local name = suffix and (base .. "-" .. suffix) or base
-    local def = { name = name, type = typ, category = category, x = p.x + ox, y = p.y + oy,
-                  heading = 0, canCrash = false }
-    for k, v in pairs(extra or {}) do def[k] = v end
-    local ok, err = pcall(coalition.addStaticObject, D.cfg.blueCountry, def)
-    local exists = StaticObject.getByName(name) ~= nil
-    if exists then names[#names + 1] = name end
-    lines[#lines + 1] = string.format("- %s (%s): %s", kind, typ, exists and "created" or ("FAILED" .. (ok and "" or (" – " .. tostring(err)))))
-    return exists
-  end
-
-  add("FARP", nil, "FARP", "Heliports", 0, 0,
-      { shape_name = "FARPS", heliport_callsign_id = 1, heliport_frequency = "127.5", heliport_modulation = 0 })
-  add("Fuel depot", "FUEL", "FARP Fuel Depot", "Fortifications", 28, 0)
-  add("Ammo dump", "AMMO", "FARP Ammo Dump Coating", "Fortifications", 0, 28)
-  add("Tent", "TENT", "FARP Tent", "Fortifications", -28, 0)
-
-  -- Was weiß DCS über den neuen Platz?
-  local ab = Airbase.getByName(base)
-  if ab then
-    local cat, side = "?", "?"
-    pcall(function() cat = tostring(ab:getDesc().category) end)
-    pcall(function() side = tostring(ab:getCoalition()) end)
-    lines[#lines + 1] = string.format("- Airbase object \"%s\": found (category %s, coalition %s)", base, cat, side)
-    local wh
-    pcall(function() wh = ab:getWarehouse() end)
-    if wh then
-      lines[#lines + 1] = "- Warehouse: available"
-      local ok, err = pcall(function() wh:setItem("AH-64D_BLK_II", 4) end)
-      local count = "?"
-      pcall(function() count = tostring(wh:getItemCount("AH-64D_BLK_II")) end)
-      lines[#lines + 1] = string.format("- Stock AH-64D_BLK_II set to 4: %s (reads back: %s)", ok and "OK" or ("FAILED – " .. tostring(err)), count)
-    else
-      lines[#lines + 1] = "- Warehouse: NOT available"
-    end
-  else
-    lines[#lines + 1] = "- Airbase object: NOT found (DCS does not treat the FARP as an airbase)"
-  end
-
-  D.farpTest = { names = names, pos = p }
-  local text = "FARP TEST at " .. D.fmtPos(p) .. "\n" .. table.concat(lines, "\n") ..
-    "\nNext: open the slot/respawn menu and check whether \"" .. base .. "\" is offered. Also land a helicopter here and ask ground crew for rearm and refuel."
-  env.info("DynSEAD " .. text:gsub("\n", " | "))
-  msg(text)
+local function farpStatic(name, typ, category, p, extra)
+  local def = { name = name, type = typ, category = category, x = p.x, y = p.y, heading = 0, canCrash = false }
+  for k, v in pairs(extra or {}) do def[k] = v end
+  pcall(coalition.addStaticObject, D.cfg.blueCountry, def)
+  return StaticObject.getByName(name) ~= nil
 end
 
--- Test 2: Client-Slot per Skript am Test-FARP erzeugen (taucht der Slot in der Slot-Liste auf?)
--- Probiert mehrere Varianten (Land, Skill, Route) und meldet für jede das genaue Ergebnis.
 local function dumpErr(err)
   if type(err) ~= "table" then return tostring(err) end
   local parts = {}
@@ -3430,64 +3401,240 @@ local function dumpErr(err)
   return "{" .. table.concat(parts, ", ") .. "}"
 end
 
-function D.farpTestSlot()
-  local pos = D.farpTest and D.farpTest.pos
-  if not pos then
-    for _, pu in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
-      if pu and pu:isExist() then pos = toV2(pu:getPoint()) break end
+-- Bewaffnung aus einer AH-64D-Vorlage der Mission übernehmen, wenn dort Pylone belegt sind
+function D.farpLoadTemplatePayloads()
+  D.farpTemplatePayload = {}
+  local want = {}
+  for _, t in ipairs(D.cfg.farp.types) do want[t] = true end
+  pcall(function()
+    for _, side in pairs(env.mission.coalition) do
+      for _, c in pairs(side.country or {}) do
+        for _, g in pairs((c.helicopter and c.helicopter.group) or {}) do
+          local u = g.units and g.units[1]
+          if u and want[u.type] and u.payload and u.payload.pylons and next(u.payload.pylons) ~= nil
+             and not D.farpTemplatePayload[u.type] then
+            local p = { pylons = {}, fuel = u.payload.fuel, flare = u.payload.flare, chaff = u.payload.chaff, gun = u.payload.gun }
+            for k, v in pairs(u.payload.pylons) do p.pylons[k] = v end
+            D.farpTemplatePayload[u.type] = p
+          end
+        end
+      end
     end
-  end
-  if not pos then msg("FARP TEST: No test FARP and no player found. Build the FARP first.") return end
-  if D.farpTestGroups then msg("FARP TEST: Test slot groups already exist. Remove the test first.") return end
-
-  local variants = {
-    { tag = "A", country = country.id.USA,       skill = "Client", route = true,  note = "USA, skill Client, TakeOffGround" },
-    { tag = "B", country = D.cfg.blueCountry,    skill = "Client", route = true,  note = "CJTF_BLUE, skill Client" },
-    { tag = "C", country = country.id.USA,       skill = "Player", route = true,  note = "USA, skill Player" },
-    { tag = "D", country = country.id.USA,       skill = "Client", route = false, note = "USA, skill Client, no route" },
-  }
-  D.farpTestGroups = {}
-  local lines = {}
-  for i, v in ipairs(variants) do
-    local gname = "FARPSLOT-" .. v.tag
-    local x, y = pos.x + 20 * i, pos.y + 20
-    local h = land.getHeight({ x = x, y = y })
-    local data = {
-      name = gname, task = "CAS", uncontrolled = false,
-      units = { { name = gname .. "-1", type = "AH-64D_BLK_II", skill = v.skill, x = x, y = y, heading = 0,
-                  alt = h, alt_type = "BARO", speed = 0,
-                  payload = { pylons = {}, fuel = 1000, flare = 30, chaff = 30, gun = 100 } } },
-    }
-    if v.route then
-      data.route = { points = { { x = x, y = y, alt = h, alt_type = "BARO", type = "TakeOffGround",
-                                   action = "From Ground Area", speed = 0, ETA = 0, ETA_locked = false,
-                                   speed_locked = true, task = { id = "ComboTask", params = { tasks = {} } } } } }
-    end
-    local ok, err = pcall(coalition.addGroup, v.country, Group.Category.HELICOPTER, data)
-    local g = Group.getByName(gname)
-    local exists = g and g:isExist()
-    if exists then D.farpTestGroups[#D.farpTestGroups + 1] = gname end
-    lines[#lines + 1] = string.format("%s) %s: %s", v.tag, v.note,
-      exists and "created" or ("FAILED – " .. (ok and "no group exists afterwards" or dumpErr(err))))
-  end
-  local text = "FARP TEST (client slots):\n" .. table.concat(lines, "\n") ..
-    "\nNow check the slot list for new AH-64D slots named FARPSLOT-A … D (rejoining the server may be needed to refresh)."
-  env.info("DynSEAD " .. text:gsub("\n", " | "))
-  msg(text)
+  end)
 end
 
-function D.farpTestRemove()
-  if D.farpTestGroups then
-    for _, gn in ipairs(D.farpTestGroups) do destroyGroup(gn) end
-    D.farpTestGroups = nil
+local function farpPayload(typ)
+  if D.farpTemplatePayload == nil then D.farpLoadTemplatePayloads() end
+  return D.farpTemplatePayload[typ] or D.cfg.farp.payloads[typ]
+    or { pylons = {}, fuel = 1000, flare = 30, chaff = 30, gun = 100 }
+end
+
+function D.farpMark(f)
+  if not D.cfg.mapMarks then return end
+  if f.mark then trigger.action.removeMark(f.mark) end
+  f.mark = newMarkId()
+  trigger.action.markToCoalition(f.mark, string.format("%s (%d helicopter slot%s left)", f.name,
+    math.max(0, f.stock - f.used), (f.stock - f.used) == 1 and "" or "s"), toV3(f.pos), D.cfg.blueSide, true)
+end
+
+local function farpMakeSlot(f, index)
+  local cfg = D.cfg.farp
+  local typ = cfg.types[((index - 1) % #cfg.types) + 1]
+  local gname = string.format("%s-S%d", f.name, f.nextSlot)
+  f.nextSlot = f.nextSlot + 1
+  local k = (index - 1) % 4
+  local o = cfg.slotOffset
+  local ox = ({ o, o, -o, -o })[k + 1]
+  local oy = ({ o, -o, o, -o })[k + 1]
+  local x, y = f.pos.x + ox, f.pos.y + oy
+  local h = land.getHeight({ x = x, y = y })
+  local data = {
+    name = gname, task = "CAS", uncontrolled = false,
+    units = { { name = gname .. "-1", type = typ, skill = "Player", x = x, y = y, heading = 0,
+                alt = h, alt_type = "BARO", speed = 0, payload = farpPayload(typ) } },
+    route = { points = { { x = x, y = y, alt = h, alt_type = "BARO", type = "TakeOffGround",
+                           action = "From Ground Area", speed = 0, ETA = 0, ETA_locked = false,
+                           speed_locked = true, task = { id = "ComboTask", params = { tasks = {} } } } } },
+  }
+  local ok, err = pcall(coalition.addGroup, cfg.country, Group.Category.HELICOPTER, data)
+  local g = Group.getByName(gname)
+  if g and g:isExist() then
+    f.slots[#f.slots + 1] = gname
+    return true
   end
-  if not D.farpTest then msg("FARP TEST: Test group removed, no test FARP to remove.") return end
-  for _, name in ipairs(D.farpTest.names) do
-    local o = StaticObject.getByName(name)
+  reportError("FARP", string.format("slot %s (%s) could not be created: %s", gname, typ,
+    ok and "no group exists afterwards" or dumpErr(err)))
+  return false
+end
+
+local function farpFind(name)
+  for _, f in ipairs(D.farps) do
+    if f.name == name then return f end
+  end
+end
+
+local function farpNearest(p, maxD)
+  local best, bd = nil, maxD or math.huge
+  for _, f in ipairs(D.farps) do
+    local d = dist(p, f.pos)
+    if d < bd then best, bd = f, d end
+  end
+  return best, bd
+end
+
+-- gelandeten Hubschrauber der Gruppe finden und prüfen
+local function farpCaller(gname)
+  local g = Group.getByName(gname)
+  if not g or not g:isExist() then return nil, "Group not found." end
+  local u = g:getUnit(1)
+  if not u or not u:isExist() then return nil, "Aircraft not found." end
+  if u:inAir() then return nil, "FARP: Land first, then request the delivery." end
+  local v = u:getVelocity()
+  if v and math.sqrt((v.x or 0) ^ 2 + (v.z or 0) ^ 2) > D.cfg.farp.maxSpeed then
+    return nil, "FARP: Come to a full stop before requesting the delivery."
+  end
+  return u
+end
+
+function D.farpDeploy(gname)
+  local cfg = D.cfg.farp
+  if not cfg.enabled then return end
+  local u, why = farpCaller(gname)
+  if not u then msg(why) return end
+  local up = toV2(u:getPoint())
+  local now = timer.getTime()
+
+  -- Nachschub für einen bestehenden FARP in der Nähe
+  local near = farpNearest(up, cfg.resupplyRadius)
+  if not near then near = farpNearest(up, cfg.resupplyRadius + cfg.padOffset) end
+  if near then
+    if now - near.lastDelivery < cfg.cooldown then
+      msg(string.format("%s: Supplies were delivered recently. Next delivery possible in %d s.",
+        near.name, math.ceil(cfg.cooldown - (now - near.lastDelivery))))
+      return
+    end
+    local open = near.stock - near.used
+    local add = cfg.slotsPerFarp
+    near.stock = near.stock + add
+    near.lastDelivery = now
+    local made = 0
+    for i = 1, add do
+      if farpMakeSlot(near, near.nextSlot) then made = made + 1 end
+    end
+    near.stock = near.stock - (add - made)
+    D.farpMark(near)
+    msg(string.format("%s: Supplies delivered. %d helicopter slot%s available again (%d in total).",
+      near.name, made, made == 1 and "" or "s", near.stock - near.used))
+    return
+  end
+
+  if #D.farps >= cfg.maxFarps then
+    msg(string.format("FARP: Maximum of %d FARPs reached. Dismantle one first (F10 > Logistics).", cfg.maxFarps))
+    return
+  end
+  local c = { x = up.x + cfg.padOffset, y = up.y }
+  if farpNearest(c, cfg.minSeparation) then
+    msg(string.format("FARP: Too close to another FARP (minimum %d m).", cfg.minSeparation))
+    return
+  end
+  if land.getSurfaceType(c) ~= land.SurfaceType.LAND or not okGround(c) then
+    msg("FARP: The ground here is too uneven or not suitable. Land on flat, open ground.")
+    return
+  end
+
+  D.farpCounter = D.farpCounter + 1
+  local name = "FARP-" .. D.farpCounter
+  local names = {}
+  if not farpStatic(name, "FARP", "Heliports", c,
+      { shape_name = "FARPS", heliport_callsign_id = 1, heliport_frequency = "127.5", heliport_modulation = 0 }) then
+    reportError("FARP", "could not create the FARP object – check the type name")
+    msg("FARP: Construction failed.")
+    return
+  end
+  names[#names + 1] = name
+  local extras = {
+    { "FUEL", "FARP Fuel Depot", "Fortifications", 28, 0 },
+    { "AMMO", "FARP Ammo Dump Coating", "Fortifications", 0, 28 },
+    { "TENT", "FARP Tent", "Fortifications", -28, 0 },
+  }
+  for _, e in ipairs(extras) do
+    local sname = name .. "-" .. e[1]
+    if farpStatic(sname, e[2], e[3], { x = c.x + e[4], y = c.y + e[5] }) then names[#names + 1] = sname end
+  end
+
+  local f = { name = name, pos = c, objects = names, slots = {}, nextSlot = 1, stock = cfg.slotsPerFarp, used = 0,
+              usedSlots = {}, lastDelivery = now }
+  D.farps[#D.farps + 1] = f
+  local made = 0
+  for i = 1, cfg.slotsPerFarp do
+    if farpMakeSlot(f, i) then made = made + 1 end
+  end
+  f.stock = made
+  D.farpMark(f)
+  msg(string.format("%s deployed at %s.\n%d attack helicopter slot%s are now available in the slot list (%s-S1 …). Ground crew at the pad provides rearm and refuel. Deliver again with a transport helicopter to resupply.",
+    name, D.fmtPos(c), made, made == 1 and "" or "s", name))
+end
+
+-- Ein Spieler ist in einen FARP-Slot eingestiegen: Vorrat zählen
+function D.farpOnBirth(u)
+  if not u or not D.cfg.farp.enabled then return end
+  local ok, gname = pcall(function() return u:getGroup():getName() end)
+  if not ok or not gname then return end
+  local fname = gname:match("^(FARP%-%d+)%-S%d+$")
+  if not fname then return end
+  local f = farpFind(fname)
+  if not f or f.usedSlots[gname] then return end
+  f.usedSlots[gname] = true
+  f.used = f.used + 1
+  D.farpMark(f)
+  local left = f.stock - f.used
+  if left > 0 then
+    msg(string.format("%s: %d helicopter slot%s left.", f.name, left, left == 1 and "" or "s"))
+  else
+    msg(string.format("%s: Supplies exhausted. Deliver more with a transport helicopter (F10 > Logistics).", f.name))
+  end
+end
+
+function D.farpStatus()
+  if #D.farps == 0 then msg("FARP: No forward FARP deployed. Land a helicopter and use F10 > Logistics.") return end
+  local lines = { "FORWARD FARPS:" }
+  for _, f in ipairs(D.farps) do
+    lines[#lines + 1] = string.format("%s – %d of %d slots left\n   %s", f.name, math.max(0, f.stock - f.used), f.stock, D.fmtPos(f.pos))
+  end
+  msg(table.concat(lines, "\n"))
+end
+
+function D.farpDismantle(gname)
+  local u, why = farpCaller(gname)
+  if not u then msg(why) return end
+  local f = farpNearest(toV2(u:getPoint()), 300)
+  if not f then msg("FARP: No FARP within 300 m.") return end
+  for _, n in ipairs(f.objects) do
+    local o = StaticObject.getByName(n)
     if o then pcall(function() o:destroy() end) end
   end
-  D.farpTest = nil
-  msg("FARP TEST: Test FARP removed.")
+  for _, sg in ipairs(f.slots) do destroyGroup(sg) end
+  if f.mark then trigger.action.removeMark(f.mark) end
+  for i, x in ipairs(D.farps) do
+    if x == f then table.remove(D.farps, i) break end
+  end
+  msg(f.name .. " dismantled.")
+end
+
+-- F10-Menü für Spieler-Hubschrauber (gruppenbezogen)
+function D.farpAddMenu(u)
+  if not u or not D.cfg.farp.enabled then return end
+  local okd, desc = pcall(function() return u:getDesc() end)
+  if not okd or not desc or desc.category ~= Unit.Category.HELICOPTER then return end
+  local g = u:getGroup()
+  local gid, gname = g:getID(), g:getName()
+  if gname:match("^FARP%-%d+%-S%d+$") then return end   -- FARP-Slot-Hubschrauber selbst brauchen kein Logistik-Menü
+  if D.farpMenus[gid] then pcall(missionCommands.removeItemForGroup, gid, D.farpMenus[gid]) end
+  local root = missionCommands.addSubMenuForGroup(gid, "Logistics")
+  D.farpMenus[gid] = root
+  missionCommands.addCommandForGroup(gid, "Deploy FARP here / resupply nearby FARP", root, safe(function() D.farpDeploy(gname) end, "Menu"))
+  missionCommands.addCommandForGroup(gid, "FARP status", root, safe(D.farpStatus, "Menu"))
+  missionCommands.addCommandForGroup(gid, "Dismantle nearest FARP (within 300 m)", root, safe(function() D.farpDismantle(gname) end, "Menu"))
 end
 
 -------------------------------------------------------------------------------
@@ -3700,6 +3847,7 @@ function D.buildMenu()
   end
   cmd(info, "Threats: MANPADS areas", D.reportManpads)
   cmd(info, "Support: AWACS & tankers", D.reportSupport)
+  if D.cfg.farp.enabled then cmd(info, "Forward FARPs: status", D.farpStatus) end
   cmd(info, "Statistics", D.reportStats)
 
   local cas = sub(root, "CAS")
@@ -3755,9 +3903,6 @@ function D.buildMenu()
   if D.cfg.debugMenu then
     local dbg = sub(root, "DEBUG")
     cmd(dbg, "Show all units on map (on/off)", D.debugMapToggle)
-    cmd(dbg, "FARP test: build at first player", D.farpTestBuild)
-    cmd(dbg, "FARP test: spawn client slot at FARP", D.farpTestSlot)
-    cmd(dbg, "FARP test: remove", D.farpTestRemove)
     if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
   end
@@ -3770,6 +3915,8 @@ function D.handler:onEvent(e)
       local u = e.initiator
       if u and u.getPlayerName and u:getPlayerName() then
         if not D.started then D.start() else D.scheduleRedraw() end
+        safe(D.farpOnBirth, "FARP")(u)
+        safe(D.farpAddMenu, "FARP menu")(u)
       end
     elseif e.id == world.event.S_EVENT_SHOT then
       onShot(e)
@@ -3862,12 +4009,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.23 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.24 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.23 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.24 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
