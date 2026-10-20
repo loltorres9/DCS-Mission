@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.31). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.31 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.32). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.32 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten) |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `options`, `voice` (siehe Docstring); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
 | `tools/geo.py` | Caucasus-Flugplätze (ID, Name, Lat/Lon) + Umrechnung Lat/Lon → DCS x/y (Transverse Mercator, pydcs-Parameter; ~1 km genau) |
@@ -72,7 +72,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
   „siting checks“ (Wirkung prüfbar).
 - Keine einzelnen Infanteristen: Einzelpersonen sind schwer zu finden, daher spawnen Garnison, CAS, TIC (auch die Verbündeten) und Deep-Strike-Schutz nur
   Fahrzeuge. Ausnahme MANPADS (`SA-18 Igla manpad`): daneben parkt ein `UAZ-469` (Marker für die Suche, 6 m Abstand).
-- Spawns per `coalition.addGroup` mit selbst gebauten Gruppentabellen (Land `CJTF_RED` / `CJTF_BLUE`).
+- Spawns per `coalition.addGroup` mit selbst gebauten Gruppentabellen (Land `CJTF_RED` / `CJTF_BLUE`). Bodengruppen immer über `D.addGround(country, data)`: ergänzt Gruppen-x/y,
+  Startwegpunkt und Editor-Felder (Versuch v4.32: Skript-Gruppen zeigten auf der F10-Karte nur das erste Fahrzeug, Editor-Gruppen alle; ob das hilft, ist ungetestet).
 - Hauptschleife `D.update` alle 10 s; ARM-Tracking `D.armTick` jede Sekunde; `D.voiceTick` alle 0,5 s.
 - SAM-Radar = `ALARM_STATE` RED/GREEN. Modi: always / blink / ambush (typabhängige Auslöse-Reichweite).
 - ARM-Abwehr: Rakete wird verfolgt, Zielzuordnung über `getTarget()` sonst horizontale Flugrichtung;
@@ -109,14 +110,14 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
 6. Optional: Vorlagen auf neutrale Nation verschieben, falls sie als eigene Slots in der Slot-Liste auftauchen.
 7. Keine Persistenz – Kampagne beginnt nach Server-Neustart von vorn.
-8. **Ship Strike (v4.31)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
+8. **Ship Strike (v4.32)** ungetestet im Spiel: Schiffstypnamen (`ALBATROS`, `MOLNIYA`, `NEUSTRASH`, `Dry-cargo ship-1`, `ELNYA`), Naval-ROE-Option
    (`AI.Option.Naval.id.ROE`, Werte 2 = OPEN_FIRE / 4 = WEAPON_HOLD), Seepunkt-Suche (`land.getSurfaceType`). Fehlen Schiffe, meldet
    das Skript „only X of Y ships spawned“. Keine Sprachbausteine dafür (nur Text).
-9. **Nebenaufträge (v4.31)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
+9. **Nebenaufträge (v4.32)** ungetestet im Spiel: Konvoi-Route (`On Road` über 30–70 km, wird nach 180 s ohne Bewegung abgebrochen), Typnamen
    (Hauptbasis `RPC_5N62V`/`RLS_19J6`/`S-200_Launcher`/`S-300PS …`/`1L13 EWR`/`55G6 EWR`, Bomber `Tu-95MS`/`Tu-160`, `REACTION_ON_THREAT`, Konvoi, Deep-Strike-Statik `.Command Center`/`Warehouse`/`Tank`, TIC-Einheiten), `Spot.createInfraRed`/`createLaser`, Platzhalter-Koordinaten
    in `D.cfg.deepStrike.targets`. Logik wurde nur gegen einen DCS-Mock (lupa) getestet. Keine Sprachbausteine dafür.
-10. **Standortprüfung (v4.31)** ungetestet im Spiel: ob `world.searchObjects(Object.Category.SCENERY, …)` Bäume liefert (sonst nur Gebäude), Wirkung über die Zähler „siting checks“ in `dcs.log` prüfen.
-11. **Vorwärts-FARP (v4.31)** ungetestet im Spiel (Test-Ergebnisse siehe unten): Ein gelandeter Hubschrauber löst im gruppenbezogenen F10-Menü „Logistics“ > „Deploy FARP here“ aus; das Skript baut
+10. **Standortprüfung (v4.32)** ungetestet im Spiel: ob `world.searchObjects(Object.Category.SCENERY, …)` Bäume liefert (sonst nur Gebäude), Wirkung über die Zähler „siting checks“ in `dcs.log` prüfen.
+11. **Vorwärts-FARP (v4.32)** ungetestet im Spiel (Test-Ergebnisse siehe unten): Ein gelandeter Hubschrauber löst im gruppenbezogenen F10-Menü „Logistics“ > „Deploy FARP here“ aus; das Skript baut
     `FARP` + Tankdepot/Munition/Zelt 60 m nördlich und erzeugt `slotsPerFarp` (4) Slot-Gruppen `FARP-n-S1…` (Skill `"Player"`, Land USA, Start `TakeOffGround`), die in der Slot-Liste erscheinen. Jeder Einstieg
     (`S_EVENT_BIRTH`) zählt den Vorrat herunter; erneute Lieferung am selben FARP (Radius 250 m, 300 s Abstand) füllt auf; „Dismantle nearest FARP“ baut ab; Kartenmarker zeigt die Restslots.
     Bewaffnung: aus einer AH-64D-Vorlage der Mission (`env.mission`), falls dort Pylone belegt sind, sonst `cfg.farp.payloads` (aktuell leer = unbewaffnet, CLSIDs fehlen noch).
