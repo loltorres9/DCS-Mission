@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.37 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.38 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -325,8 +325,15 @@ D.cfg = {
     speed          = 7,            -- m/s Vormarsch
     blueUnits      = { "M-60", "M-2 Bradley", "M-2 Bradley", "M-113", "M-113", "M1043 HMMWV Armament" },   -- je Gruppe nur ein älterer Panzer
     redUnits       = { "T-72B3", "T-72B3", "BMP-3", "BMP-2", "BTR-82A", "ZSU-23-4 Shilka" },          -- Shilka: Achtung für A-10/AH-64
-    endPercent     = 85,           -- Schlacht endet, wenn eine Seite so viel ihrer Stärke verloren hat
-    maxTime        = 2700,         -- s, danach gilt die Schlacht als unentschieden
+    activateRange  = 20000,        -- Truppen warten (Feuer halten, kein Vormarsch), bis ein Spieler so nah (m) an der Schlachtfeld-Mitte ist
+    waves          = 3,            -- Verstärkungswellen je Seite (nur solange ein Spieler in der Nähe ist)
+    waveGroups     = 3,            -- Gruppen pro Welle
+    waveBelow      = 40,           -- neue Welle, wenn eine Seite unter diesen Anteil (%) ihrer Grundstärke fällt
+    waveCooldown   = 180,          -- s Mindestabstand zwischen zwei Wellen derselben Seite
+    waveBack       = 1500,         -- Wellen rücken aus so viel m hinter der eigenen Ausgangslinie an
+    endPercent     = 85,           -- Seite besiegt: alle Wellen verbraucht und nur noch (100 - endPercent) % der Grundstärke übrig
+    maxTime        = 2700,         -- s ab Kampfbeginn, danach gilt die Schlacht als unentschieden
+    idleTime       = 7200,         -- s ohne Spieler in der Nähe, nach denen eine wartende Schlacht abgebaut wird
     cleanupAfter   = 600,
   },
 
@@ -2942,12 +2949,34 @@ end
 -------------------------------------------------------------------------------
 -- FRONTLINE BATTLE: KI-gegen-KI-Panzerschlacht nahe einer feindlichen Basis
 -------------------------------------------------------------------------------
-function D.spawnBattleSide(bt, blue, center, axisSign)
+local function battleWP(p)
+  return { x = p.x, y = p.y, type = "Turning Point", action = "Off Road", speed = D.cfg.battle.speed,
+           speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
+end
+
+-- Gruppe vorrücken lassen und Feuer frei (bzw. warten mit Feuer halten)
+local function battleGo(gname, dest, go)
+  local g = Group.getByName(gname)
+  if not g or not g:isExist() then return end
+  local c = g:getController()
+  pcall(function()
+    c:setOption(AI.Option.Ground.id.ROE, go and AI.Option.Ground.val.ROE.OPEN_FIRE or AI.Option.Ground.val.ROE.WEAPON_HOLD)
+  end)
+  if go and dest then
+    local cur = groupPos(gname)
+    if cur then
+      pcall(function() c:setTask({ id = "Mission", params = { route = { points = { battleWP(cur), battleWP(dest) } } } }) end)
+    end
+  end
+end
+
+-- Eine Seite (oder eine Welle mit nGroups Gruppen) spawnen; go = sofort vorrücken
+function D.spawnBattleSide(bt, blue, center, axisSign, nGroups, back, go)
   local cfg = D.cfg.battle
   local types = blue and cfg.blueUnits or cfg.redUnits
   local country = blue and D.cfg.blueCountry or D.cfg.redCountry
-  local nGroups = math.max(1, math.floor((blue and cfg.bluePerSide or cfg.redPerSide) / cfg.groupSize))
-  local linePos = offset(center, bt.axis, axisSign * bt.gap / 2)
+  nGroups = nGroups or math.max(1, math.floor((blue and cfg.bluePerSide or cfg.redPerSide) / cfg.groupSize))
+  local linePos = offset(center, bt.axis, axisSign * (bt.gap / 2 + (back or 0)))
   local hdg = bt.axis + (axisSign > 0 and math.pi or 0)   -- Blick zum Gegner
   local dest = offset(center, bt.axis, -axisSign * 150)   -- bis knapp hinter die Mitte
   local names = {}
@@ -2963,18 +2992,19 @@ function D.spawnBattleSide(bt, blue, center, axisSign)
       units[#units + 1] = { name = gname .. "-" .. i, type = typ, x = q.x, y = q.y, heading = hdg,
                             skill = blue and cfg.blueSkill or cfg.redSkill, playerCanDrive = false }
     end
-    local function wp(p)
-      return { x = p.x, y = p.y, type = "Turning Point", action = "Off Road", speed = cfg.speed,
-               speed_locked = true, ETA = 0, ETA_locked = false, task = emptyTask() }
-    end
     local d = offset(dest, bt.axis + math.pi / 2, (g - (nGroups + 1) / 2) * (cfg.groupSize * cfg.lineSpacing / 2 + 60))
     D.addGround(country, { name = gname, task = "Ground Nothing",
-      hidden = (not blue) and D.hideOnMap() or nil, units = units, route = { points = { wp(gc), wp(d) } } })
+      hidden = (not blue) and D.hideOnMap() or nil, units = units,
+      route = { points = go and { battleWP(gc), battleWP(d) } or { battleWP(gc) } } })
     local alive = groupAliveCount(gname)
     if alive < #units then
       reportError("BATTLE", string.format("only %d of %d units spawned in %s – check D.cfg.battle unit types", alive, #units, gname))
     end
-    if alive > 0 then names[#names + 1] = gname end
+    if alive > 0 then
+      names[#names + 1] = gname
+      bt.dest[gname] = d
+      battleGo(gname, nil, go)
+    end
   end
   return names
 end
@@ -3031,7 +3061,8 @@ function D.spawnBattle(manual)
     return false
   end
 
-  local bt = { axis = axis, gap = gap, center = center, area = base.name, started = timer.getTime() }
+  local bt = { axis = axis, gap = gap, center = center, area = base.name, created = timer.getTime(), lastNear = timer.getTime(),
+              dest = {}, active = false, waves = { blue = 0, red = 0 }, lastWave = { blue = -math.huge, red = -math.huge } }
   bt.blue = D.spawnBattleSide(bt, true, center, -1)
   bt.red = D.spawnBattleSide(bt, false, center, 1)
   bt.blueInitial, bt.redInitial = battleCount(bt.blue), battleCount(bt.red)
@@ -3046,8 +3077,9 @@ function D.spawnBattle(manual)
     bt.mark = newMarkId()
     trigger.action.markToCoalition(bt.mark, "FRONTLINE BATTLE", toV3(center), D.cfg.blueSide, true)
   end
-  msg(string.format("FRONTLINE BATTLE near %s: Allied armor (%d vehicles) is engaging an enemy force (%d vehicles). They fight on their own – tip the balance with CAS.\nPosition: %s\nExpect light AAA and MANPADS around the enemy airfield.",
-    base.name or "enemy airfield", bt.blueInitial, bt.redInitial, D.fmtPos(center)))
+  bt.blueBase, bt.redBase = bt.blueInitial, bt.redInitial
+  msg(string.format("FRONTLINE BATTLE near %s: Allied armor (%d vehicles) is facing an enemy force (%d vehicles), both sides are holding.\nThe attack begins as soon as friendly aircraft are within %d km. More waves will follow while you support the fight – tip the balance with CAS.\nPosition: %s\nExpect AAA (ZSU-23-4) with the enemy and MANPADS around the enemy airfield.",
+    base.name or "enemy airfield", bt.blueInitial, bt.redInitial, math.floor(cfg.activateRange / 1000), D.fmtPos(center)))
   return true
 end
 
@@ -3056,41 +3088,85 @@ function D.requestBattle() D.spawnBattle(true) end
 function D.reportBattle()
   if #D.battles == 0 then msg("BATTLE: No frontline battle in progress.") return end
   for _, bt in ipairs(D.battles) do
-    msg(string.format("FRONTLINE BATTLE near %s:\nAllies: %d of %d vehicles left\nEnemy: %d of %d vehicles left\n%s",
-      bt.area or "enemy airfield", battleCount(bt.blue), bt.blueInitial, battleCount(bt.red), bt.redInitial,
-      D.fmtPos(bt.center)))
+    local cfg = D.cfg.battle
+    msg(string.format("FRONTLINE BATTLE near %s – %s:\nAllies: %d vehicles left (reinforcement waves left: %d)\nEnemy: %d vehicles left (reinforcement waves left: %d)\n%s",
+      bt.area or "enemy airfield", bt.active and "fighting" or ("holding until friendly aircraft are within " .. math.floor(cfg.activateRange / 1000) .. " km"),
+      battleCount(bt.blue), cfg.waves - bt.waves.blue, battleCount(bt.red), cfg.waves - bt.waves.red, D.fmtPos(bt.center)))
   end
+end
+
+local function battleEnd(bt, verdict, b, r)
+  local cfg = D.cfg.battle
+  if bt.mark then trigger.action.removeMark(bt.mark) end
+  if verdict == "won" then
+    D.stats.battle = D.stats.battle + 1
+    msg(string.format("FRONTLINE BATTLE near %s: The enemy force is broken, allied armor holds the field (%d vehicles left). (%d won)",
+      bt.area or "enemy airfield", b, D.stats.battle))
+  elseif verdict == "lost" then
+    msg(string.format("FRONTLINE BATTLE near %s: Allied armor was destroyed. The enemy holds the field (%d vehicles left).",
+      bt.area or "enemy airfield", r))
+  elseif verdict == "idle" then
+    msg(string.format("FRONTLINE BATTLE near %s: No air support arrived, the forces have withdrawn.", bt.area or "enemy airfield"))
+  else
+    msg(string.format("FRONTLINE BATTLE near %s: The fighting has died down. Allies %d, enemy %d vehicles left.",
+      bt.area or "enemy airfield", b, r))
+  end
+  local list = {}
+  for _, g in ipairs(bt.blue) do list[#list + 1] = g end
+  for _, g in ipairs(bt.red) do list[#list + 1] = g end
+  scheduleCleanup(list, verdict == "idle" and 1 or cfg.cleanupAfter)
 end
 
 function D.battleTick(now)
   local cfg = D.cfg.battle
+  local players = playerPositions()
   for i = #D.battles, 1, -1 do
     local bt = D.battles[i]
-    local b, r = battleCount(bt.blue), battleCount(bt.red)
-    local bLoss = (1 - b / bt.blueInitial) * 100
-    local rLoss = (1 - r / bt.redInitial) * 100
-    local verdict
-    if rLoss >= cfg.endPercent then verdict = "won"
-    elseif bLoss >= cfg.endPercent then verdict = "lost"
-    elseif now - bt.started >= cfg.maxTime then verdict = "draw" end
-    if verdict then
-      table.remove(D.battles, i)
-      if bt.mark then trigger.action.removeMark(bt.mark) end
-      if verdict == "won" then
-        D.stats.battle = D.stats.battle + 1
-        msg(string.format("FRONTLINE BATTLE near %s: The enemy force is broken, allied armor holds the field (%d vehicles left). (%d won)",
-          bt.area or "enemy airfield", b, D.stats.battle))
-      elseif verdict == "lost" then
-        msg(string.format("FRONTLINE BATTLE near %s: Allied armor was destroyed. The enemy holds the field (%d vehicles left).",
-          bt.area or "enemy airfield", r))
-      else
-        msg(string.format("FRONTLINE BATTLE near %s: The fighting has died down. Allies %d, enemy %d vehicles left.",
-          bt.area or "enemy airfield", b, r))
+    local near = not farFrom(bt.center, players, cfg.activateRange)
+    if near then bt.lastNear = now end
+
+    if not bt.active then
+      -- Warten, bis ein Spieler in der Nähe ist
+      if near then
+        bt.active, bt.started = true, now
+        for _, list in ipairs({ bt.blue, bt.red }) do
+          for _, gn in ipairs(list) do battleGo(gn, bt.dest[gn], true) end
+        end
+        msg(string.format("FRONTLINE BATTLE near %s: Friendly aircraft on station – the attack has begun!", bt.area or "enemy airfield"))
+      elseif now - bt.lastNear >= cfg.idleTime then
+        table.remove(D.battles, i)
+        battleEnd(bt, "idle", 0, 0)
       end
-      local list = {}
-      for _, g in ipairs(bt.blue) do list[#list + 1] = g end
-      for _, g in ipairs(bt.red) do list[#list + 1] = g end
-      scheduleCleanup(list, cfg.cleanupAfter)
+    else
+      local b, r = battleCount(bt.blue), battleCount(bt.red)
+      -- Verstärkungswellen, solange ein Spieler in der Nähe ist
+      for _, side in ipairs({ "blue", "red" }) do
+        local alive = (side == "blue") and b or r
+        local base = (side == "blue") and bt.blueBase or bt.redBase
+        if near and bt.waves[side] < cfg.waves and alive < base * cfg.waveBelow / 100
+           and now - bt.lastWave[side] >= cfg.waveCooldown then
+          local blue = side == "blue"
+          local names = D.spawnBattleSide(bt, blue, bt.center, blue and -1 or 1, cfg.waveGroups, cfg.waveBack, true)
+          local list = blue and bt.blue or bt.red
+          for _, gn in ipairs(names) do list[#list + 1] = gn end
+          bt.waves[side] = bt.waves[side] + 1
+          bt.lastWave[side] = now
+          msg(string.format("FRONTLINE BATTLE near %s: %s reinforcements are moving up (wave %d of %d).",
+            bt.area or "enemy airfield", blue and "Allied" or "Enemy", bt.waves[side], cfg.waves))
+        end
+      end
+      b, r = battleCount(bt.blue), battleCount(bt.red)
+      local keep = (100 - cfg.endPercent) / 100
+      local verdict
+      if bt.waves.red >= cfg.waves and r <= bt.redBase * keep then verdict = "won"
+      elseif bt.waves.blue >= cfg.waves and b <= bt.blueBase * keep then verdict = "lost"
+      elseif not near and r == 0 then verdict = "won"
+      elseif not near and b == 0 then verdict = "lost"
+      elseif now - bt.started >= cfg.maxTime then verdict = "draw" end
+      if verdict then
+        table.remove(D.battles, i)
+        battleEnd(bt, verdict, b, r)
+      end
     end
   end
 end
@@ -4119,12 +4195,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.37 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.38 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.37 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.38 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
