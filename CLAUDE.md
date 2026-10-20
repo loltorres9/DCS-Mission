@@ -103,6 +103,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 - Dynamic Spawn Templates: Gruppe mit `dynSpawnTemplate = true`, Start-Wegpunkt mit `airdromeId`, Unit-Typ muss
   der **spielbare** Typ sein (`F-16C_50`, nicht `F-16C bl.50`), Skill `"Player"`, und im Warehouse des Flugplatzes
   `airports[id].aircrafts.planes|helicopters[TYP].linkDynTempl = groupId`. Bestand muss > 0 sein.
+  Vorlagen sind fürs Spawnen nicht nötig: Dynamic Spawn erlaubt jeden Typ mit Lagerbestand > 0; die Vorlage legt nur Startzustand und Wegpunkte fest (fehlt sie, spawnt der Typ ohne Route).
   F-16-Vorlagen funktionieren („sieht besser aus“). Neue Vorlagen ohne Parkposition → einmal im Editor speichern.
 - Spielbare Typnamen: `F-16C_50`, `FA-18C_hornet`, `A-10C_2`, `AJS37`, `AH-64D_BLK_II`. Viggen nimmt nur B1–B9.
 
