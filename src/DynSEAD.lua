@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.19 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.20 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -3358,6 +3358,79 @@ function D.debugMapToggle()
 end
 
 -------------------------------------------------------------------------------
+-- EXPERIMENT: per Skript gebauter FARP (klärt, ob DCS dort Lager und Spawn-Plätze zur Laufzeit erlaubt)
+-------------------------------------------------------------------------------
+D.farpTest = nil
+
+function D.farpTestBuild()
+  if D.farpTest then msg("FARP TEST: A test FARP already exists. Remove it first.") return end
+  local u
+  for _, pu in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+    if pu and pu:isExist() then u = pu break end
+  end
+  if not u then msg("FARP TEST: No player unit found. Spawn in first, then land where the FARP should be.") return end
+
+  local p = toV2(u:getPoint())
+  local base = "FARPTEST"
+  local names, lines = {}, {}
+  local function add(kind, suffix, typ, category, ox, oy, extra)
+    local name = suffix and (base .. "-" .. suffix) or base
+    local def = { name = name, type = typ, category = category, x = p.x + ox, y = p.y + oy,
+                  heading = 0, canCrash = false }
+    for k, v in pairs(extra or {}) do def[k] = v end
+    local ok, err = pcall(coalition.addStaticObject, D.cfg.blueCountry, def)
+    local exists = StaticObject.getByName(name) ~= nil
+    if exists then names[#names + 1] = name end
+    lines[#lines + 1] = string.format("- %s (%s): %s", kind, typ, exists and "created" or ("FAILED" .. (ok and "" or (" – " .. tostring(err)))))
+    return exists
+  end
+
+  add("FARP", nil, "FARP", "Heliports", 0, 0,
+      { shape_name = "FARPS", heliport_callsign_id = 1, heliport_frequency = "127.5", heliport_modulation = 0 })
+  add("Fuel depot", "FUEL", "FARP Fuel Depot", "Fortifications", 28, 0)
+  add("Ammo dump", "AMMO", "FARP Ammo Dump Coating", "Fortifications", 0, 28)
+  add("Tent", "TENT", "FARP Tent", "Fortifications", -28, 0)
+
+  -- Was weiß DCS über den neuen Platz?
+  local ab = Airbase.getByName(base)
+  if ab then
+    local cat, side = "?", "?"
+    pcall(function() cat = tostring(ab:getDesc().category) end)
+    pcall(function() side = tostring(ab:getCoalition()) end)
+    lines[#lines + 1] = string.format("- Airbase object \"%s\": found (category %s, coalition %s)", base, cat, side)
+    local wh
+    pcall(function() wh = ab:getWarehouse() end)
+    if wh then
+      lines[#lines + 1] = "- Warehouse: available"
+      local ok, err = pcall(function() wh:setItem("AH-64D_BLK_II", 4) end)
+      local count = "?"
+      pcall(function() count = tostring(wh:getItemCount("AH-64D_BLK_II")) end)
+      lines[#lines + 1] = string.format("- Stock AH-64D_BLK_II set to 4: %s (reads back: %s)", ok and "OK" or ("FAILED – " .. tostring(err)), count)
+    else
+      lines[#lines + 1] = "- Warehouse: NOT available"
+    end
+  else
+    lines[#lines + 1] = "- Airbase object: NOT found (DCS does not treat the FARP as an airbase)"
+  end
+
+  D.farpTest = { names = names, pos = p }
+  local text = "FARP TEST at " .. D.fmtPos(p) .. "\n" .. table.concat(lines, "\n") ..
+    "\nNext: open the slot/respawn menu and check whether \"" .. base .. "\" is offered. Also land a helicopter here and ask ground crew for rearm and refuel."
+  env.info("DynSEAD " .. text:gsub("\n", " | "))
+  msg(text)
+end
+
+function D.farpTestRemove()
+  if not D.farpTest then msg("FARP TEST: No test FARP to remove.") return end
+  for _, name in ipairs(D.farpTest.names) do
+    local o = StaticObject.getByName(name)
+    if o then pcall(function() o:destroy() end) end
+  end
+  D.farpTest = nil
+  msg("FARP TEST: Test FARP removed.")
+end
+
+-------------------------------------------------------------------------------
 -- BERICHTE
 -------------------------------------------------------------------------------
 function D.voicePicture()
@@ -3622,6 +3695,8 @@ function D.buildMenu()
   if D.cfg.debugMenu then
     local dbg = sub(root, "DEBUG")
     cmd(dbg, "Show all units on map (on/off)", D.debugMapToggle)
+    cmd(dbg, "FARP test: build at first player", D.farpTestBuild)
+    cmd(dbg, "FARP test: remove", D.farpTestRemove)
     if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
   end
@@ -3726,12 +3801,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.19 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.20 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.19 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.20 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
