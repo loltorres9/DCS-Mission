@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.27 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.28 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -1562,23 +1562,10 @@ function D.spawnManpadsZones(ao)
       if #units > 0 then
         coalition.addGroup(D.cfg.redCountry, Group.Category.GROUND,
           { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
-        local entry = { group = gname, center = c }
-        D.drawManpads(entry)
-        ao.manpads[#ao.manpads + 1] = entry
-        D.say({ "caution_manpads", tBE(c), "stay_above", tNum(math.floor(cfg.safeAltFt / 1000)), "thousand" })
-        msg(string.format("THREAT WARNING [%s]: MANPADS activity reported within %s of\n%s\nAvoid low altitude – stay above %d ft AGL.",
-          ao.name, fmtDist(cfg.radius), D.fmtPos(c), cfg.safeAltFt))
+        ao.manpads[#ao.manpads + 1] = { group = gname, center = c }
       end
     end
   end
-end
-
-function D.drawManpads(entry)
-  if not D.cfg.drawAO then return end
-  if entry.drawId then trigger.action.removeMark(entry.drawId) end
-  entry.drawId = newMarkId()
-  trigger.action.circleToAll(D.cfg.blueSide, entry.drawId, toV3(entry.center), D.cfg.manpads.radius,
-    {1, 0.6, 0, 0.9}, {1, 0.6, 0, 0.12}, 3, true, "MANPADS threat area")
 end
 
 -- Alle Kartenzeichnungen neu anlegen (DCS überträgt Skript-Zeichnungen nicht
@@ -1590,9 +1577,6 @@ function D.redrawAll()
     if ao.wptMark then
       trigger.action.removeMark(ao.wptMark)
       D.addAOWaypoint(ao)
-    end
-    for _, m in ipairs(ao.manpads or {}) do
-      if groupAliveCount(m.group) > 0 then D.drawManpads(m) end
     end
   end
 end
@@ -1607,22 +1591,36 @@ end
 function D.clearManpads(ao)
   for _, m in ipairs(ao.manpads or {}) do
     destroyGroup(m.group)
-    if m.drawId then trigger.action.removeMark(m.drawId) end
   end
   ao.manpads = {}
 end
 
-function D.reportManpads()
-  local lines = { "MANPADS THREAT AREAS:" }
-  for _, ao in ipairs(D.aos) do
-    for _, m in ipairs(ao.manpads or {}) do
-      if groupAliveCount(m.group) > 0 then
-        lines[#lines + 1] = string.format("• [%s] radius %s\n   %s", ao.name, fmtDist(D.cfg.manpads.radius), D.fmtPos(m.center))
-      end
+-- Lagebild einer AO: nur SAM-Typen und MANPADS ja/nein, keine Positionen
+function D.aoThreats(ao)
+  local counts, order = {}, {}
+  for _, st in ipairs(D.sites) do
+    if st.ao == ao then
+      local n = st.def.name
+      if not counts[n] then counts[n] = 0; order[#order + 1] = n end
+      counts[n] = counts[n] + 1
     end
   end
-  if #lines == 1 then lines[#lines + 1] = "None reported." end
-  lines[#lines + 1] = string.format("Recommendation: stay above %d ft AGL.", D.cfg.manpads.safeAltFt)
+  local parts = {}
+  for _, n in ipairs(order) do parts[#parts + 1] = string.format("%dx %s", counts[n], n) end
+  local manpads = false
+  for _, m in ipairs(ao.manpads or {}) do
+    if groupAliveCount(m.group) > 0 then manpads = true break end
+  end
+  return string.format("[%s] SAM: %s\n   MANPADS: %s", ao.name,
+    #parts > 0 and table.concat(parts, ", ") or "none", manpads
+      and string.format("expect MANPADS – stay above %d ft AGL", D.cfg.manpads.safeAltFt) or "none reported")
+end
+
+function D.reportThreats()
+  if #D.aos == 0 then msg("THREATS: No active AOs.") return end
+  local lines = { "THREAT ASSESSMENT (locations unknown):" }
+  for _, ao in ipairs(D.aos) do lines[#lines + 1] = D.aoThreats(ao) end
+  lines[#lines + 1] = string.format("SAM sites neutralized so far: %d", D.stats.sam)
   msg(table.concat(lines, "\n"))
 end
 
@@ -3512,16 +3510,6 @@ end
 -------------------------------------------------------------------------------
 -- BERICHTE
 -------------------------------------------------------------------------------
-function D.reportSEAD()
-  if #D.sites == 0 then msg("SEAD: No SAM sites active.") return end
-  local lines = { "SEAD SITREP (locations unknown – find them yourself):" }
-  for i, st in ipairs(D.sites) do
-    lines[#lines + 1] = string.format("%d) [%s] %s", i, st.ao.name, st.def.name)
-  end
-  lines[#lines + 1] = string.format("Neutralized so far: %d", D.stats.sam)
-  msg(table.concat(lines, "\n"))
-end
-
 function D.reportCampaign()
   if D.cfg.mode ~= "airbases" then
     msg(string.format("Endless mode – %d AO(s) active.", #D.aos))
@@ -3616,6 +3604,13 @@ function D.update()
   -- Kampagne
   if D.cfg.mode == "airbases" then D.checkAOs(now) end
 
+  for _, ao in ipairs(D.aos) do
+    if not ao.briefed and not ao.fortress and ao.samActive > 0 and (ao.samLeft == 0 or ao.samLeft == math.huge) then
+      ao.briefed = true
+      msg("INTEL " .. D.aoThreats(ao))
+    end
+  end
+
   -- Nachschub
   if now >= D.nextSam then
     local ok = D.spawnSam()
@@ -3703,8 +3698,7 @@ function D.buildMenu()
   local info = sub(root, "Info")
   cmd(info, "Campaign: Status", D.reportCampaign)
   cmd(info, "Navigation: AO steerpoints", D.reportNav)
-  cmd(info, "SEAD: SITREP", D.reportSEAD)
-  cmd(info, "Threats: MANPADS areas", D.reportManpads)
+  cmd(info, "Threats: SAMs & MANPADS per AO", D.reportThreats)
   cmd(info, "Support: AWACS & tankers", D.reportSupport)
   if D.cfg.farp.enabled then cmd(info, "Forward FARPs: status", D.farpStatus) end
   cmd(info, "Statistics", D.reportStats)
@@ -3868,12 +3862,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.27 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.28 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.27 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.28 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
