@@ -5,6 +5,7 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
   python tools/miz_tool.py info      MISSION.miz
   python tools/miz_tool.py embed     MISSION.miz src/DynSEAD.lua            [-o OUT.miz]
   python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [--keep] [-o OUT.miz]   (Caucasus, Syria)
+  python tools/miz_tool.py reroute   MISSION.miz [-o OUT.miz]   Wegpunkte aller Vorlagen: nächstgelegene Ziele je Startplatz
   python tools/miz_tool.py options   MISSION.miz optionsView=optview_all --forced [-o OUT.miz]
   python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio [1-3]] [-o OUT.miz]
 
@@ -14,7 +15,7 @@ Benötigt nur Python 3 (voice zusätzlich ffmpeg im PATH).
 import argparse, copy, io, math, os, re, shutil, subprocess, sys, tempfile, wave, zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from luatable import parse, dump
-from geo import ll_to_dcs, AIRFIELDS, SYRIA_AIRFIELDS
+from geo import ll_to_dcs, AIRFIELDS, SYRIA_AIRFIELDS, SYRIA_FRIENDLY
 
 MAIN_SCRIPT_PREFIX = "DynSEAD"          # eingebettetes Hauptskript: DynSEAD_vX.Y.lua
 VOICE_INDEX = "DynSEAD_voice.lua"
@@ -69,6 +70,24 @@ def airfield_table(th):
     if th == "Syria":
         return dict(SYRIA_AIRFIELDS)
     return {}
+
+def target_ids(th, table, home):
+    """Kampagnenziele der Karte (für die Wegpunkte der Vorlagen)"""
+    if th == "Syria":
+        return [i for i in table if i not in SYRIA_FRIENDLY]
+    return [i for i in table if i not in home]
+
+def route_points(af, targets, table, wname, alt, alt_type, spd, maxwp):
+    """Wegpunkte 2..n: die maxwp Ziele, die dem Startplatz af am nächsten sind (aufsteigend nach Entfernung)"""
+    x0, y0 = table[af][1], table[af][2]
+    near = sorted((t for t in targets if t != af), key=lambda t: math.hypot(table[t][1] - x0, table[t][2] - y0))
+    pts = {}
+    for n, t in enumerate(near[:maxwp], start=2):
+        pts[n] = {"alt": alt, "action": "Turning Point", "alt_type": alt_type, "speed": spd,
+                  "task": {"id": "ComboTask", "params": {"tasks": {}}}, "type": "Turning Point",
+                  "ETA": 0, "ETA_locked": False, "x": table[t][1], "y": table[t][2], "speed_locked": True,
+                  "formation_template": "", "name": wname(table[t][0])}
+    return pts
 
 def campaign_order(home, table):
     pos = {i: (x, y) for i, (n, x, y) in table.items()}
@@ -142,6 +161,7 @@ def cmd_templates(a):
     home = [i for i, ap in w["airports"].items() if ap.get("coalition", "").upper() == "BLUE"]
     order, pos = campaign_order(home, table)
     name = {i: v[0] for i, v in table.items()}
+    targets = target_ids(theatre(miz), table, home)
 
     # alte Vorlagen entfernen (alle blauen Gruppen mit dynSpawnTemplate); --keep: behalten, belegte Plätze überspringen
     for c in ([] if a.keep else m["coalition"]["blue"]["country"].values()):
@@ -193,20 +213,42 @@ def cmd_templates(a):
             sp["airdromeId"] = af
             sp["task"] = {"id": "ComboTask", "params": {"tasks": {}}}
             u.pop("parking", None); u.pop("parking_id", None)     # Editor vergibt Stellplatz beim Speichern
-            pts = {1: sp}; n = 2
-            for t in [t for t in order if t != af][:maxwp]:
-                tx, ty = pos[t]
-                pts[n] = {"alt": alt, "action": "Turning Point", "alt_type": alt_type, "speed": spd,
-                          "task": {"id": "ComboTask", "params": {"tasks": {}}}, "type": "Turning Point",
-                          "ETA": 0, "ETA_locked": False, "x": tx, "y": ty, "speed_locked": True,
-                          "formation_template": "", "name": wname(name[t])}
-                n += 1
+            pts = {1: sp}
+            pts.update(route_points(af, targets, table, wname, alt, alt_type, spd, maxwp))
             g["route"] = {"points": pts}
             bucket[len(bucket) + 1] = g
             entry["linkDynTempl"] = gid
             total += 1
     print("Vorlagen erzeugt:", total, "| Kampagnenreihenfolge:", ", ".join(name[i] for i in order))
     print("Hinweis: Mission danach einmal im Editor öffnen und speichern (Parkpositionen).")
+    miz.save(a.out)
+
+def cmd_reroute(a):
+    """Wegpunkte aller vorhandenen Vorlagen neu setzen (nächstgelegene Ziele je Startplatz); Startpunkt/Parkplatz bleiben"""
+    miz = Miz(a.miz)
+    table = airfield_table(theatre(miz))
+    if not table: sys.exit("Keine Flugplatztabelle (tools/geo.py) für Karte %s" % theatre(miz))
+    m, w = miz.table("mission"), miz.table("warehouses")
+    dic = miz.table("l10n/DEFAULT/dictionary")
+    home = [i for i, ap in w["airports"].items() if ap.get("coalition", "").upper() == "BLUE"]
+    targets = target_ids(theatre(miz), table, home)
+    params = {t[0]: t for t in TYPES}
+    def wname(text):
+        m["maxDictId"] += 1
+        k = "DictKey_WptName_%d" % m["maxDictId"]; dic[k] = text; return k
+    n = 0
+    for _, _, g in blue_groups(m):
+        if not g.get("dynSpawnTemplate"): continue
+        typ = g["units"][1]["type"]; sp = g["route"]["points"][1]; af = sp.get("airdromeId")
+        if typ not in params or af not in table: continue
+        _, _, _, _, alt, alt_type, spd, maxwp, _, _ = params[typ]
+        for p in list(g["route"]["points"].values())[1:]:
+            if isinstance(p.get("name"), str) and p["name"].startswith("DictKey_WptName_"): dic.pop(p["name"], None)
+        pts = {1: sp}
+        pts.update(route_points(af, targets, table, wname, alt, alt_type, spd, maxwp))
+        g["route"]["points"] = pts
+        n += 1
+    print("Wegpunkte neu gesetzt:", n, "Vorlagen")
     miz.save(a.out)
 
 # ----------------------------------------------------------------- voice
@@ -319,6 +361,7 @@ if __name__ == "__main__":
     s.add_argument("--types", nargs="*", help="Labels/Typen, z.B. F-16 A-10C_2 (Standard: alle)")
     s.add_argument("--keep", action="store_true", help="vorhandene Vorlagen behalten, nur fehlende ergänzen")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
+    s = sp.add_parser("reroute"); s.add_argument("miz"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_reroute)
     s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all; mit --forced entfernt KEY= den Eintrag"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")
     s.add_argument("--radio", nargs="?", type=int, const=2, default=0, choices=[0, 1, 2, 3], help="Funkfilter: 1 leicht, 2 normal (Standard bei --radio), 3 stark verzerrt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_voice)

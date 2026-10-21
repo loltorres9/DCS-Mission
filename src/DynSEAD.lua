@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.44 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.45 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -99,7 +99,8 @@ D.cfg = {
       exclude       = {},
       ignore        = { "^H[%a_]+%d+$", "Heliport" },   -- HS02, HMed01, H_med_orig_03, HOil01 …; nicht H3/H4
       -- Fronten: jede Front hat eigene aktive Ziele und rückt von ihren Basen (plus eroberten Plätzen) aus vor
-      -- Tanker auf festen Strecken (ersetzen tankers.list); track = Start- und End-Lat/Lon der Race-Track-Strecke
+      -- Tanker (ersetzen tankers.list); track = Start- und End-Lat/Lon der Race-Track-Strecke.
+      -- Ohne front: feste Strecke (weicht nur SAM-Reichweiten aus); mit front: rückt mit dieser Front vor (track = Startposition)
       tankers = {
         -- Mittelmeer südöstlich von Zypern
         { name = "Texaco", type = "KC-135",    kind = "boom",   callsignIndex = 1, flight = 1,
@@ -107,14 +108,14 @@ D.cfg = {
         { name = "Arco",   type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 1,
           frequency = 256.0, tacan = 52, tacanId = "ARC", alt = 5500, speed = 160, track = { 34.55, 34.05, 34.25, 34.65 } },
         -- Norden, türkische Seite der Grenze zu Syrien
-        { name = "Shell",  type = "KC-135",    kind = "boom",   callsignIndex = 3, flight = 1,
+        { name = "Shell",  type = "KC-135",    kind = "boom",   callsignIndex = 3, flight = 1, front = "North",
           frequency = 257.0, tacan = 53, tacanId = "SHL", alt = 6700, speed = 165, track = { 37.25, 36.60, 37.25, 37.60 } },
-        { name = "Arco2",  type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 2, callsign = "Arco",
+        { name = "Arco2",  type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 2, callsign = "Arco", front = "North", offsetBack = 15000,
           frequency = 258.0, tacan = 54, tacanId = "AR2", alt = 5800, speed = 160, track = { 37.40, 36.60, 37.40, 37.60 } },
         -- Süden, über Jordanien (Südfront)
-        { name = "Texaco2", type = "KC-135",   kind = "boom",   callsignIndex = 1, flight = 2, callsign = "Texaco",
+        { name = "Texaco2", type = "KC-135",   kind = "boom",   callsignIndex = 1, flight = 2, callsign = "Texaco", front = "South",
           frequency = 259.0, tacan = 55, tacanId = "TX2", alt = 6400, speed = 165, track = { 32.00, 36.90, 32.00, 37.90 } },
-        { name = "Arco3",  type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 3, callsign = "Arco",
+        { name = "Arco3",  type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 3, callsign = "Arco", front = "South", offsetBack = 15000,
           frequency = 260.0, tacan = 56, tacanId = "AR3", alt = 5650, speed = 160, track = { 31.85, 36.90, 31.85, 37.90 } },
       },
       fronts = {
@@ -226,6 +227,8 @@ D.cfg = {
     enabled        = true,
     distFromAO     = 90000,        -- Orbit-Mitte X m von der AO-Mitte Richtung eigene Basis
     minAOClearance = 75000,        -- Mindestabstand des Orbits zu jeder aktiven AO-Mitte
+    samMargin      = 20000,        -- Strecke bleibt so viel (m) außerhalb der Reichweite jeder SAM-Stellung (sam.engageRange)
+    checkInterval  = 60,           -- s: Strecken prüfen und Tanker bei Bedarf verlegen
     legLength      = 50000,
     immortal       = true,         -- unverwundbar und für Gegner unsichtbar
     respawnDelay   = 300,          -- Ersatz nach Abschuss / Rückflug (Sprit leer)
@@ -1579,33 +1582,98 @@ function D.checkAwacs(now)
 end
 
 -- Tanker-Orbit: auf der Linie AO -> nächste blaue Basis, außerhalb der SAM-Reichweite
+-- Liegt die Tankerstrecke außerhalb aller SAM-Reichweiten (plus Sicherheitsabstand)?
+-- Gezählt werden gebaute Stellungen und AOs, deren SAMs noch nicht stehen (dort irgendwo im AO-Kreis).
+local function tankerThreats()
+  local cfg, list = D.cfg.tankers, {}
+  for _, st in ipairs(D.sites) do
+    local r = ((D.cfg.sam.engageRange or {})[st.key] or D.cfg.sam.ambushRange) + cfg.samMargin
+    list[#list + 1] = { p = st.pos, r = r }
+  end
+  local maxR = 0
+  for _, r in pairs(D.cfg.sam.engageRange or {}) do if r < 100000 then maxR = math.max(maxR, r) end end
+  for _, ao in ipairs(D.aos) do
+    if ao.samLeft and ao.samLeft > 0 and ao.samLeft ~= math.huge then
+      list[#list + 1] = { p = { x = ao.x, y = ao.y }, r = ao.radius + maxR + cfg.samMargin }
+    end
+  end
+  return list
+end
+
+local function trackClear(p1, p2, threats)
+  for k = 0, 4 do
+    local q = { x = p1.x + (p2.x - p1.x) * k / 4, y = p1.y + (p2.y - p1.y) * k / 4 }
+    for _, th in ipairs(threats) do
+      if dist(q, th.p) < th.r then return false, th end
+    end
+  end
+  return true
+end
+
+local function frontByName2(n)
+  for _, f in ipairs(D.fronts or {}) do if f.name == n then return f end end
+end
+
 function D.tankerOrbit(t)
-  if t.track then   -- feste Strecke aus dem Kartenprofil
+  local cfg = D.cfg.tankers
+  local threats = tankerThreats()
+  local half = cfg.legLength / 2
+  local front = t.front and frontByName2(t.front)
+  local frontAOs = {}
+  for _, ao in ipairs(D.aos) do if front and ao.front == front then frontAOs[#frontAOs + 1] = ao end end
+
+  -- 1) feste Strecke (ohne Front, oder Front noch ohne Ziel): bleibt, weicht aber SAM-Reichweiten aus
+  if t.track and #frontAOs == 0 then
     local a = coord.LLtoLO(t.track[1], t.track[2], 0)
     local b = coord.LLtoLO(t.track[3], t.track[4], 0)
     local p1, p2 = { x = a.x, y = a.z }, { x = b.x, y = b.z }
+    for _ = 1, 30 do
+      local ok, th = trackClear(p1, p2, threats)
+      if ok then break end
+      local c = { x = (p1.x + p2.x) / 2, y = (p1.y + p2.y) / 2 }
+      local away = math.atan2(c.y - th.p.y, c.x - th.p.x)
+      p1, p2 = offset(p1, away, 10000), offset(p2, away, 10000)
+    end
     return p1, p2, { x = (p1.x + p2.x) / 2, y = (p1.y + p2.y) / 2 }
   end
+
+  -- 2) mitlaufend: hinter den Zielen der eigenen Front (bzw. hinter der ersten AO), Richtung eigene Basen
   D.refreshBlueBases()
-  local ao = D.aos[1]
-  if not ao or #D.blueBases == 0 then return nil end
-  local cfg = D.cfg.tankers
-  local A = { x = ao.x, y = ao.y }
-  local B = nearestBlueBase(A)
+  local A, bases
+  if #frontAOs > 0 then
+    -- die Front-AO, die den eigenen Basen am nächsten ist (dort tankt man auf dem Weg ins Ziel)
+    bases = front.pos
+    local best = math.huge
+    for _, ao in ipairs(frontAOs) do
+      for _, fb in ipairs(bases) do
+        local d = dist(ao, fb)
+        if d < best then best, A = d, { x = ao.x, y = ao.y } end
+      end
+    end
+  else
+    local ao = D.aos[1]
+    if not ao or #D.blueBases == 0 then return nil end
+    A, bases = { x = ao.x, y = ao.y }, D.blueBases
+  end
+  local B, bd = nil, math.huge
+  for _, b in ipairs(bases) do local d = dist(A, b); if d < bd then B, bd = b, d end end
+  if not B then return nil end
   local dir = math.atan2(B.y - A.y, B.x - A.x)
-  local along = cfg.distFromAO + (t.offsetBack or 0)
-  local c
-  for _ = 1, 15 do
+  local along = cfg.minAOClearance + (t.offsetBack or 0)   -- so nah wie möglich, aber außerhalb aller SAM-Reichweiten
+  local c, p1, p2
+  for _ = 1, 40 do
     c = offset(A, dir, along)
-    local clear = true
-    for _, a in ipairs(D.aos) do
-      if dist(c, { x = a.x, y = a.y }) < cfg.minAOClearance then clear = false break end
+    p1, p2 = offset(c, dir + math.pi / 2, -half), offset(c, dir + math.pi / 2, half)
+    local clear = trackClear(p1, p2, threats)
+    if clear then
+      for _, a in ipairs(D.aos) do
+        if dist(c, { x = a.x, y = a.y }) < cfg.minAOClearance then clear = false break end
+      end
     end
     if clear then break end
     along = along + 10000
   end
-  local half = cfg.legLength / 2
-  return offset(c, dir + math.pi / 2, -half), offset(c, dir + math.pi / 2, half), c
+  return p1, p2, c
 end
 
 local function tankerTasks(t, p1, p2)
@@ -1658,19 +1726,21 @@ function D.spawnTanker(t)
   end, "Tanker"), nil, timer.getTime() + 3)
 
   t.spawned = true
+  t.center = c
   msg(string.format("%s on station, FL%03d.\nTrack center: %s",
     tankerLabel(t), math.floor(t.alt * 3.28084 / 100 + 0.5), bullseyeStr(c)))
   return true
 end
 
-function D.repositionTankers()
+function D.repositionTankers(quiet)
   local cfg = D.cfg.tankers
   if not cfg.enabled then return end
   for _, t in ipairs(cfg.list) do
-    local u = not t.track and supportUnit(t.name)   -- feste Strecken bleiben, wo sie sind
+    local u = supportUnit(t.name)
     if u then
       local p1, p2, c = D.tankerOrbit(t)
-      if p1 then
+      if p1 and (not t.center or dist(c, t.center) > 10000) then
+        t.center = c
         u:getGroup():getController():setTask({ id = "Mission", params = { route = { points = {
           airWP(toV2(u:getPoint()), t.alt, t.speed, {}),
           airWP(p1, t.alt, t.speed, tankerTasks(t, p1, p2)),
@@ -3994,6 +4064,10 @@ function D.update()
   -- AWACS / ELINT
   D.checkAwacs(now)
   D.checkTankers(now)
+  if D.cfg.tankers.enabled and now >= (D.nextTankerCheck or 0) then
+    D.nextTankerCheck = now + D.cfg.tankers.checkInterval
+    D.repositionTankers()
+  end
 
   -- CAS
   for i = #D.casTasks, 1, -1 do
@@ -4607,12 +4681,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.44 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.45 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.44 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.45 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
