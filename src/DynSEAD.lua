@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.43 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.44 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -111,6 +111,11 @@ D.cfg = {
           frequency = 257.0, tacan = 53, tacanId = "SHL", alt = 6700, speed = 165, track = { 37.25, 36.60, 37.25, 37.60 } },
         { name = "Arco2",  type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 2, callsign = "Arco",
           frequency = 258.0, tacan = 54, tacanId = "AR2", alt = 5800, speed = 160, track = { 37.40, 36.60, 37.40, 37.60 } },
+        -- Süden, über Jordanien (Südfront)
+        { name = "Texaco2", type = "KC-135",   kind = "boom",   callsignIndex = 1, flight = 2, callsign = "Texaco",
+          frequency = 259.0, tacan = 55, tacanId = "TX2", alt = 6400, speed = 165, track = { 32.00, 36.90, 32.00, 37.90 } },
+        { name = "Arco3",  type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 3, callsign = "Arco",
+          frequency = 260.0, tacan = 56, tacanId = "AR3", alt = 5650, speed = 160, track = { 31.85, 36.90, 31.85, 37.90 } },
       },
       fronts = {
         { name = "North", active = 2, bases = { "Incirlik", "Adana Sakirpasa", "Chukurova", "Hatay", "Gaziantep",
@@ -4602,12 +4607,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.43 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.44 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.43 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.44 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
