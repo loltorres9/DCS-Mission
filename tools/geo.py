@@ -116,6 +116,11 @@ SYRIA_AIRFIELDS = {
     226: ('T3', -59252, 258868),
 }
 
+# Syria: freundliche Plätze (kein Ziel), wie D.cfg.maps.Syria im Skript: Türkei, Zypern, Jordanien
+SYRIA_FRIENDLY = {16, 2, 90, 15, 11, 75, 58, 219, 216, 217, 218, 41,      # Türkei
+                  43, 44, 45, 46, 47, 48, 49, 50, 51,                    # Zypern
+                  19, 56, 57, 12, 61, 64, 65, 67, 68}                    # Jordanien
+
 if __name__ == "__main__":
     x,y = ll_to_dcs(42.2386,42.0611)
     print("Senaki berechnet: x=%.0f y=%.0f" % (x,y))
