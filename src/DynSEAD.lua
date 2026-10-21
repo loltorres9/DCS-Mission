@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.42 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.43 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -63,6 +63,17 @@ D.cfg = {
     maxDistance     = 0,           -- 0 = egal; sonst max. Entfernung zur nächsten blauen Basis
     aoSeparation    = 85000,       -- Mindestabstand der Mittelpunkte gleichzeitig aktiver AOs (m), ca. 2 x aoRadius + Puffer: Kreise überlappen nicht
     captureDelay    = 60,
+  },
+
+  -- Kampagnenstand speichern: (1) Datei auf dem Server, braucht io/lfs (in DCS\Scripts\MissionScripting.lua
+  --     "sanitizeModule('io')" und "sanitizeModule('lfs')" auskommentieren), (2) Spielstand-Code, der überall
+  --     funktioniert: wird nach jeder Eroberung angezeigt, Laden per Kartenmarker mit Text "LOAD <Code>"
+  persistence = {
+    enabled  = true,
+    file     = true,
+    fileName = "DynSEAD_save_%s.txt",   -- in Saved Games\DCS…\ (lfs.writedir), %s = Karte
+    interval = 120,                     -- s zwischen automatischen Speicherungen (zusätzlich nach jeder Eroberung)
+    code     = true,
   },
 
   -- Kartenspezifische Einstellungen; gewählt nach env.mission.theatre. Überschreiben die allgemeinen Werte.
@@ -3271,6 +3282,7 @@ function D.reserveFortress()
     if name == c.name then table.remove(D.targetPool, i) break end
   end
   D.fortressBase = c.name
+  D.fortressName = c.name
   env.info("DynSEAD: main base reserved: " .. c.name)
 end
 
@@ -3375,9 +3387,12 @@ function D.fortressTick(now)
   scheduleCleanup(f.groups, D.cfg.sam.cleanupAfter)
   D.capturedCount = D.capturedCount + 1
   D.stats.fortress = D.stats.fortress + 1
+  D.captured[#D.captured + 1] = { name = f.name }
+  D.fortressName = nil
   D.refreshBlueBases()
-  msg(string.format("MAIN BASE: The air defense network of %s is destroyed! The airfield is now under BLUE control. (%d/%d captured)",
-    f.name, D.capturedCount, D.targetsTotal))
+  msg(string.format("MAIN BASE: The air defense network of %s is destroyed! The airfield is now under BLUE control. (%d/%d captured)%s",
+    f.name, D.capturedCount, D.targetsTotal, D.saveNote()))
+  D.saveProgress()
   D.activateNext()
   D.repositionAwacs()
   D.repositionTankers()
@@ -3515,10 +3530,12 @@ function D.captureAO(ao)
   end
   D.capturedCount = D.capturedCount + 1
   if ao.front then ao.front.pos[#ao.front.pos + 1] = { x = ao.x, y = ao.y, name = ao.name } end
+  D.captured[#D.captured + 1] = { name = ao.airbase, front = ao.front and ao.front.name }
   D.refreshBlueBases()
   D.say({ tPlace(ao.name), "airfield", "now_friendly" })
-  msg(string.format("%s airfield is now under BLUE control! (%d/%d captured)\nSpawning available there.",
-    ao.name, D.capturedCount, D.targetsTotal))
+  msg(string.format("%s airfield is now under BLUE control! (%d/%d captured)\nSpawning available there.%s",
+    ao.name, D.capturedCount, D.targetsTotal, D.saveNote()))
+  D.saveProgress()
   D.activateNext()
   D.checkFortress()
   D.repositionAwacs()
@@ -4014,6 +4031,8 @@ function D.update()
     end
   end
 
+  if D.cfg.persistence.enabled and now - (D.lastSave or 0) >= D.cfg.persistence.interval then D.saveProgress() end
+
   -- Nachschub
   if now >= D.nextSam then
     local ok = D.spawnSam()
@@ -4129,6 +4148,10 @@ function D.buildMenu()
   cmd(info, "Support: AWACS & tankers", D.reportSupport)
   if D.cfg.farp.enabled then cmd(info, "Forward FARPs: status", D.farpStatus) end
   cmd(info, "Statistics", D.reportStats)
+  if D.cfg.persistence.enabled then
+    cmd(info, "Campaign: save code / save status", D.reportSave)
+    cmd(info, "Campaign: reset saved progress", D.resetSave)
+  end
 
   local cas = sub(root, "CAS")
   cmd(cas, "Request new tasking", D.requestCAS)
@@ -4194,6 +4217,253 @@ function D.buildMenu()
   end
 end
 
+-------------------------------------------------------------------------------
+-- KAMPAGNENSTAND SPEICHERN: Datei (Server mit io/lfs) und Spielstand-Code (Kartenmarker "LOAD <Code>")
+-------------------------------------------------------------------------------
+D.captured = {}          -- { name, front } in Eroberungsreihenfolge
+D.campaignList = nil     -- alle Kampagnen-Flugplätze (sortiert) für den Code
+local B32 = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+local function saveFilePath()
+  local p = D.cfg.persistence
+  if not (p.enabled and p.file) or type(io) ~= "table" or type(lfs) ~= "table" or not lfs.writedir then return nil end
+  return lfs.writedir() .. string.format(p.fileName, D.theatre or "map")
+end
+
+local function frontByName(n)
+  for _, f in ipairs(D.fronts or {}) do if f.name == n then return f end end
+end
+
+-- Stand als Code: Bitmaske der eroberten Plätze + Index der Hauptbasis + Prüfzeichen
+function D.saveCode()
+  local list = D.campaignList
+  if not list then return nil end
+  local captured = {}
+  for _, c in ipairs(D.captured) do captured[c.name] = true end
+  local bits = {}
+  local fi = 0
+  for i, n in ipairs(list) do
+    bits[#bits + 1] = captured[n] and 1 or 0
+    if n == D.fortressName then fi = i end
+  end
+  local out = { B32:sub(math.floor(fi / 32) + 1, math.floor(fi / 32) + 1), B32:sub(fi % 32 + 1, fi % 32 + 1) }
+  for i = 1, #bits, 5 do
+    local v = 0
+    for k = 0, 4 do v = v * 2 + (bits[i + k] or 0) end
+    out[#out + 1] = B32:sub(v + 1, v + 1)
+  end
+  local sum = 0
+  for _, ch in ipairs(out) do sum = sum + B32:find(ch, 1, true) end
+  out[#out + 1] = B32:sub(sum % 32 + 1, sum % 32 + 1)
+  local raw = (D.theatre or "X"):sub(1, 1):upper() .. table.concat(out)
+  return (raw:gsub("(%w%w%w%w)", "%1-"):gsub("%-$", ""))
+end
+
+local function decodeCode(code)
+  local list = D.campaignList
+  if not list then return nil, "campaign list not ready" end
+  local raw = code:upper():gsub("[^%w]", "")
+  if raw:sub(1, 1) ~= (D.theatre or "X"):sub(1, 1):upper() then return nil, "code is for another map" end
+  raw = raw:sub(2)
+  local vals = {}
+  for i = 1, #raw do
+    local p = B32:find(raw:sub(i, i), 1, true)
+    if not p then return nil, "invalid character" end
+    vals[i] = p - 1
+  end
+  local need = 2 + math.ceil(#list / 5) + 1
+  if #vals ~= need then return nil, "wrong length" end
+  local sum = 0
+  for i = 1, #vals - 1 do sum = sum + vals[i] + 1 end
+  if sum % 32 ~= vals[#vals] then return nil, "checksum mismatch" end
+  local fi = vals[1] * 32 + vals[2]
+  local state = { captured = {}, fortress = list[fi] }
+  local idx = 1
+  for i = 3, #vals - 1 do
+    for k = 4, 0, -1 do
+      if idx <= #list and math.floor(vals[i] / 2 ^ k) % 2 == 1 then state.captured[#state.captured + 1] = { name = list[idx] } end
+      idx = idx + 1
+    end
+  end
+  return state
+end
+
+function D.saveNote()
+  if not (D.cfg.persistence.enabled and D.cfg.persistence.code) then return "" end
+  local c = D.saveCode()
+  return c and ("\nSave code: " .. c) or ""
+end
+
+-- Datei schreiben (einfaches Textformat, wird beim Laden nicht ausgeführt)
+function D.saveProgress()
+  local path = not D.saveDisabled and saveFilePath()
+  if not path then return false end
+  local lines = { "version=1", "theatre=" .. tostring(D.theatre) }
+  if D.fortressName then lines[#lines + 1] = "fortress=" .. D.fortressName end
+  for _, c in ipairs(D.captured) do lines[#lines + 1] = "captured=" .. c.name .. "|" .. (c.front or "") end
+  for k, v in pairs(D.stats) do lines[#lines + 1] = "stat=" .. k .. "|" .. tostring(v) end
+  local ok, err = pcall(function()
+    local fh = assert(io.open(path, "w"))
+    fh:write(table.concat(lines, "\n"), "\n")
+    fh:close()
+  end)
+  if not ok then env.warning("DynSEAD: could not write save file " .. path .. ": " .. tostring(err)) end
+  D.lastSave = timer.getTime()
+  return ok
+end
+
+local function readSaveFile()
+  local path = saveFilePath()
+  if not path then return nil end
+  local ok, text = pcall(function()
+    local fh = io.open(path, "r")
+    if not fh then return nil end
+    local t = fh:read("*a")
+    fh:close()
+    return t
+  end)
+  if not ok or not text or text == "" then return nil end
+  local state = { captured = {}, stats = {} }
+  for line in text:gmatch("[^\r\n]+") do
+    local k, v = line:match("^(%w+)=(.*)$")
+    if k == "theatre" then state.theatre = v
+    elseif k == "fortress" then state.fortress = v
+    elseif k == "captured" then
+      local n, fr = v:match("^(.-)|(.*)$")
+      state.captured[#state.captured + 1] = { name = n or v, front = (fr ~= "" and fr) or nil }
+    elseif k == "stat" then
+      local sk, sv = v:match("^(.-)|(.*)$")
+      if sk and tonumber(sv) then state.stats[sk] = tonumber(sv) end
+    end
+  end
+  if state.theatre and state.theatre ~= D.theatre then return nil end
+  return state
+end
+
+-- Aktive AO aufgeben (für Laden mitten im Spiel): Einheiten entfernen, Ziel zurück in den Pool
+local function dropAO(ao)
+  for i = #D.sites, 1, -1 do
+    local st = D.sites[i]
+    if st.ao == ao then
+      destroyGroup(st.group)
+      if st.pdGroup then destroyGroup(st.pdGroup) end
+      table.remove(D.sites, i)
+    end
+  end
+  for i = #D.casTasks, 1, -1 do
+    if D.casTasks[i].ao == ao then destroyGroup(D.casTasks[i].group); table.remove(D.casTasks, i) end
+  end
+  if ao.garrison then destroyGroup(ao.garrison) end
+  D.clearManpads(ao)
+  if ao.drawId then trigger.action.removeMark(ao.drawId) end
+  if ao.wptMark then trigger.action.removeMark(ao.wptMark) end
+  table.insert(D.targetPool, 1, ao.airbase)
+end
+
+-- Stand anwenden (beim Start oder per LOAD-Code mitten im Spiel)
+function D.applySave(state, source)
+  if D.fortress then
+    msg("LOAD: Not possible while the enemy main base is active.")
+    return false
+  end
+  local inPool = {}
+  for _, n in ipairs(D.targetPool) do inPool[n] = true end
+  if D.fortressBase then inPool[D.fortressBase] = true end
+  for _, ao in ipairs(D.aos) do inPool[ao.airbase] = true end
+  -- aktive AOs aufgeben
+  for i = #D.aos, 1, -1 do dropAO(D.aos[i]); table.remove(D.aos, i) end
+  -- Hauptbasis wie gespeichert
+  if state.fortress and inPool[state.fortress] and state.fortress ~= D.fortressBase then
+    if D.fortressBase then D.targetPool[#D.targetPool + 1] = D.fortressBase end
+    for i, n in ipairs(D.targetPool) do if n == state.fortress then table.remove(D.targetPool, i) break end end
+    D.fortressBase, D.fortressName = state.fortress, state.fortress
+  end
+  local n = 0
+  for _, c in ipairs(state.captured) do
+    local ab = Airbase.getByName(c.name)
+    if ab and inPool[c.name] then
+      ab:setCoalition(D.cfg.blueSide)
+      pcall(function() ab:autoCapture(false) end)
+      for i, t in ipairs(D.targetPool) do if t == c.name then table.remove(D.targetPool, i) break end end
+      if c.name == D.fortressBase then D.fortressBase = nil; D.fortressName = nil end
+      local f = frontByName(c.front)
+      if f then local p = toV2(ab:getPoint()); p.name = c.name; f.pos[#f.pos + 1] = p end
+      D.captured[#D.captured + 1] = { name = c.name, front = c.front }
+      n = n + 1
+    end
+  end
+  D.capturedCount = D.capturedCount + n
+  for k, v in pairs(state.stats or {}) do if D.stats[k] then D.stats[k] = v end end
+  D.refreshBlueBases()
+  env.info(string.format("DynSEAD: campaign restored from %s – %d airfield(s) captured, main base %s", source, n, tostring(D.fortressName)))
+  msg(string.format("CAMPAIGN RESTORED (%s): %d of %d airfields already captured.", source, D.capturedCount, D.targetsTotal))
+  if D.started then
+    D.activateNext()
+    D.checkFortress()
+    D.repositionAwacs()
+    D.repositionTankers()
+  end
+  D.saveProgress()
+  return true
+end
+
+-- Beim Laden der Mission: Datei einlesen
+function D.initPersistence()
+  local list = {}
+  for _, n in ipairs(D.targetPool) do list[#list + 1] = n end
+  if D.fortressBase then list[#list + 1] = D.fortressBase end
+  table.sort(list)
+  D.campaignList = list
+  local p = D.cfg.persistence
+  if not p.enabled then return end
+  if p.file and not saveFilePath() then
+    env.info("DynSEAD: save file disabled – io/lfs not available (MissionScripting.lua); save codes still work")
+  end
+  local state = readSaveFile()
+  if state and #state.captured > 0 then D.applySave(state, "save file") end
+end
+
+-- Kartenmarker "LOAD <Code>"
+function D.onMarkText(e)
+  local text = e.text or ""
+  local code = text:match("^%s*[Ll][Oo][Aa][Dd]%s+(.+)$")
+  if not code or not D.cfg.persistence.enabled then return end
+  pcall(trigger.action.removeMark, e.idx)
+  local state, err = decodeCode(code)
+  if not state then msg("LOAD: Save code not accepted (" .. tostring(err) .. ").") return end
+  D.applySave(state, "save code")
+end
+
+function D.reportSave()
+  local p = D.cfg.persistence
+  local lines = { string.format("CAMPAIGN SAVE: %d of %d airfields captured.", D.capturedCount, D.targetsTotal) }
+  if p.code then
+    lines[#lines + 1] = "Save code: " .. tostring(D.saveCode())
+    lines[#lines + 1] = "To restore after a restart: place an F10 map marker with the text  LOAD <code>"
+  end
+  local path = saveFilePath()
+  lines[#lines + 1] = path and ("Save file: active (" .. path .. ")") or "Save file: not available on this server (io/lfs disabled)"
+  msg(table.concat(lines, "\n"))
+end
+
+function D.resetSave()
+  local now = timer.getTime()
+  if not D.resetArmed or now - D.resetArmed > 30 then
+    D.resetArmed = now
+    msg("RESET: Select this command again within 30 s to delete the saved campaign. The current game continues; the next mission start begins a new campaign.")
+    return
+  end
+  D.resetArmed = nil
+  local path = saveFilePath()
+  if path then
+    pcall(function() local fh = io.open(path, "w"); if fh then fh:write(""); fh:close() end end)
+    D.saveDisabled = true
+    msg("RESET: Saved campaign deleted. Saving is paused until the mission restarts.")
+  else
+    msg("RESET: No save file on this server – simply do not use a save code after the restart.")
+  end
+end
+
 D.handler = {}
 function D.handler:onEvent(e)
   local ok, err = pcall(function()
@@ -4206,6 +4476,8 @@ function D.handler:onEvent(e)
       end
     elseif e.id == world.event.S_EVENT_SHOT then
       onShot(e)
+    elseif e.id == world.event.S_EVENT_MARK_ADDED or e.id == world.event.S_EVENT_MARK_CHANGE then
+      D.onMarkText(e)
     end
   end)
   if not ok then reportError("Event", err) end
@@ -4321,6 +4593,7 @@ local function init()
     end
     if #D.fronts == 0 then D.fronts = nil end
   end
+  if ok and D.cfg.mode == "airbases" then safe(D.initPersistence, "Persistence")() end
   if not ok then return end
   D.refreshBlueBases()
   if D.cfg.mode == "airbases" then D.reserveFortress() end
@@ -4329,12 +4602,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.42 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.43 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.42 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.43 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
