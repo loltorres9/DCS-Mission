@@ -12,8 +12,8 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 ## Dateien
 | Pfad | Inhalt |
 |---|---|
-| `src/DynSEAD.lua` | Missionsskript (aktuell v4.45). Version steht im Kopf als `DynSEAD vX.Y` |
-| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.45 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten). Briefing (englisch) steht im Dictionary: `DictKey_descriptionText_1` (Lage), `DictKey_descriptionBlueTask_3` (Auftrag, Support, Lagebild, SAM-Gefechtsordnung, Nebenaufträge, F10-Menü) – bei Änderungen an SAM-Typen, Menü oder Intel mitpflegen |
+| `src/DynSEAD.lua` | Missionsskript (aktuell v4.46). Version steht im Kopf als `DynSEAD vX.Y` |
+| `mission/Dynamic_Script.miz` | aktuelle Mission (Skript v4.46 eingebettet, Briefing, 105 Spawn-Vorlagen mit Wegpunkten). Briefing (englisch) steht im Dictionary: `DictKey_descriptionText_1` (Lage), `DictKey_descriptionBlueTask_3` (Auftrag, Support, Lagebild, SAM-Gefechtsordnung, Nebenaufträge, F10-Menü) – bei Änderungen an SAM-Typen, Menü oder Intel mitpflegen |
 | `mission/Dynamic_Script_Syria.miz` | Syrien-Mission (gleiches Skript, Profil `D.cfg.maps.Syria`): Vorlagen für F-16C, F/A-18C, A-10C II, AJS-37, AH-64D, CH-47F (Transporter für FARP) an allen 82 echten Flugplätzen (492 Gruppen; Incirlik vom Nutzer mit Parkplätzen, Rest per `templates --keep`, ohne Parkposition → einmal im Editor speichern). Freundlich: Türkei (Incirlik u. a.), Zypern, Jordanien; Ziele: Syrien, Libanon, Israel, West-Irak (52). F10-Ansicht „All“ erzwungen, Briefing angepasst, keine Sprachdateien |
 | `tools/miz_tool.py` | CLI: `info`, `embed`, `templates`, `reroute`, `options`, `voice` (siehe Docstring); Vorlagen-Wegpunkte = die 20 (Hubschrauber 10, Viggen 9) dem Startplatz nächstgelegenen Ziele (`route_points`, Syria-Ziele = alle außer `SYRIA_FRIENDLY`); `options` setzt Schwierigkeitsoptionen, z. B. `optionsView=optview_all` |
 | `tools/luatable.py` | Parser/Serializer für DCS-Lua-Tabellen (mission, warehouses, dictionary, mapResource) – Roundtrip getestet |
@@ -48,7 +48,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
   Syria: Syria Texaco (Boom, 255.0, 51Y) und Arco (Korb, 256.0, 52Y) über dem Mittelmeer südöstlich von Zypern,
   Shell (Boom, 257.0, 53Y) und Arco2 (Korb, Rufzeichen Arco 2-1, 258.0, 54Y) im Norden auf türkischer Seite der Grenze (Lat 37,25/37,40, Lon 36,6–37,6), Texaco2 (Boom, Rufzeichen Texaco 2-1, 259.0, 55Y) und Arco3 (Korb, Arco 3-1, 260.0, 56Y) im Süden über Jordanien (Lat 32,00/31,85, Lon 36,9–37,9). Syrien-Briefing (SUPPORT) entsprechend.
 - `D.cfg` oben: `mode` ("airbases"/"zones"), `campaign` (activeTargets=2, samPerAO, casPerAO, Garnison, `aoSeparation` = Mindestabstand gleichzeitig aktiver AOs, damit sich die Kreise nicht überlappen; sonst wird gewartet),
-  `sam` (maxActive=5, Typ-Pool, `engageRange`, `modesByType`, `armEvasion`, `relocate`, `pointDefense`),
+  `sam` (maxActive=5, Typ-Pool, `classes` (v4.46: jede AO bekommt über `D.nextSamKey(ao)` mindestens eine Mittelstrecke SA-2/3/6/11 und eine Kurzstrecke SA-8/15, Rest frei aus `pool`), `engageRange`, `modesByType`, `armEvasion`, `relocate`, `pointDefense`),
   `awacs` (Overlord E-3A 251 AM, immortal/invisible), `voice`, `tankers` (Texaco KC-135 Boom 255 AM 51Y,
   Arco KC-135MPRS Drogue 256 AM 52Y), `manpads`, `cas`, `cap` (4 Schwierigkeitsstufen, `D.capLoadouts`).
   `ship` (Ship Strike: 4 Stufen, F10-Untermenü, Ziel 35–80 km vor einem nicht-blauen Flugplatz auf See; Stufe 2/3 halten per
