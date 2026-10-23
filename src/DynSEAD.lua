@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.50 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.51 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -160,7 +160,7 @@ D.cfg = {
       reactionDelay   = {4, 10},     -- s von Entdeckung bis Radar aus
       launchAlert     = 0.3,         -- Chance, dass der Start selbst bemerkt wird (Shooter im Radar)
       alertMultiplier = 2,           -- dann ist die Crew aufmerksamer
-      maxEvasions     = 2,           -- danach weicht die Stellung keiner ARM mehr aus (Crew bleibt auf Sendung)
+      maxEvasions     = 1,           -- Radar höchstens 1x zum Ausweichen abschalten, danach bleibt die Crew auf Sendung
       recover       = {40, 90},    -- Radar bleibt nach Einschlag/Vorbeiflug X s unterdrückt (vorher 120–300)
       maxAngle      = 20,          -- Grad: Zielzuordnung über Flugrichtung, falls kein direktes Ziel
     },
@@ -4736,12 +4736,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.50 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.51 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.50 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.51 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
