@@ -4,8 +4,9 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
 
   python tools/miz_tool.py info      MISSION.miz
   python tools/miz_tool.py embed     MISSION.miz src/DynSEAD.lua            [-o OUT.miz]
-  python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [--keep] [-o OUT.miz]   (Caucasus, Syria)
-  python tools/miz_tool.py reroute   MISSION.miz [-o OUT.miz]   Wegpunkte aller Vorlagen neu: eine gemeinsame Route über alle Ziele
+  python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [--keep] [--targets] [-o OUT.miz]   (Caucasus, Syria)
+  python tools/miz_tool.py reroute   MISSION.miz [--targets] [-o OUT.miz]   Wegpunkte aller Vorlagen neu: nur Startpunkt
+                                     (Standard; AO-Koordinaten per F10-Menü) oder mit --targets eine gemeinsame Route über alle Ziele
   python tools/miz_tool.py tplside   MISSION.miz neutral|blue [-o OUT.miz]   Vorlagen in neutrales Land (Schweiz) verschieben / zurück
   python tools/miz_tool.py options   MISSION.miz optionsView=optview_all --forced [-o OUT.miz]
   python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio [1-3]] [-o OUT.miz]
@@ -203,7 +204,7 @@ def cmd_templates(a):
     order, pos = campaign_order(home, table)
     name = {i: v[0] for i, v in table.items()}
     targets = target_ids(theatre(miz), table, home)
-    route = global_route(theatre(miz), table, targets, home)
+    route = global_route(theatre(miz), table, targets, home) if a.targets else []
 
     # alte Vorlagen entfernen (alle blauen Gruppen mit dynSpawnTemplate); --keep: behalten, belegte Plätze überspringen
     for c in ([] if a.keep else m["coalition"]["blue"]["country"].values()):
@@ -266,7 +267,7 @@ def cmd_templates(a):
     miz.save(a.out)
 
 def cmd_reroute(a):
-    """Wegpunkte aller vorhandenen Vorlagen neu setzen (gemeinsame Route über alle Ziele); Startpunkt/Parkplatz bleiben"""
+    """Wegpunkte aller vorhandenen Vorlagen neu setzen (ohne --targets nur der Startpunkt); Startpunkt/Parkplatz bleiben"""
     miz = Miz(a.miz)
     table = airfield_table(theatre(miz))
     if not table: sys.exit("Keine Flugplatztabelle (tools/geo.py) für Karte %s" % theatre(miz))
@@ -274,7 +275,7 @@ def cmd_reroute(a):
     dic = miz.table("l10n/DEFAULT/dictionary")
     home = [i for i, ap in w["airports"].items() if ap.get("coalition", "").upper() == "BLUE"]
     targets = target_ids(theatre(miz), table, home)
-    route = global_route(theatre(miz), table, targets, home)
+    route = global_route(theatre(miz), table, targets, home) if a.targets else []
     params = {t[0]: t for t in TYPES}
     def wname(text):
         m["maxDictId"] += 1
@@ -438,8 +439,9 @@ if __name__ == "__main__":
     s = sp.add_parser("templates"); s.add_argument("miz"); s.add_argument("--base", required=True)
     s.add_argument("--types", nargs="*", help="Labels/Typen, z.B. F-16 A-10C_2 (Standard: alle)")
     s.add_argument("--keep", action="store_true", help="vorhandene Vorlagen behalten, nur fehlende ergänzen")
+    s.add_argument("--targets", action="store_true", help="gemeinsame Route über alle Ziele statt nur Startpunkt")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
-    s = sp.add_parser("reroute"); s.add_argument("miz"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_reroute)
+    s = sp.add_parser("reroute"); s.add_argument("miz"); s.add_argument("--targets", action="store_true", help="gemeinsame Route über alle Ziele statt nur Startpunkt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_reroute)
     s = sp.add_parser("tplside"); s.add_argument("miz"); s.add_argument("side", choices=["neutral", "blue"]); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_tplside)
     s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all; mit --forced entfernt KEY= den Eintrag"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")
