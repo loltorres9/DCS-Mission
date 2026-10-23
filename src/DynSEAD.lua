@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.64 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.65 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -587,7 +587,6 @@ D.cfg = {
     interceptBase = { 40000, 300000 },  -- Abfangjäger starten von der Startbahn des roten Platzes, der der Reststrecke am
                                         -- nächsten ist (mind. 40 km von blauen Basen, max. 300 km von der C-130)
     interceptDist = 90000,         -- nur falls kein Platz passt: Luftstart so weit von der C-130 Richtung Feindgebiet
-    huntUpdate    = 30,
   },
 
   -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
@@ -2826,7 +2825,7 @@ function D.requestEscort()
   local mark = newMarkId()
   trigger.action.lineToAll(D.cfg.blueSide, mark, toV3(start), toV3(dest), {0.2, 0.6, 1, 0.9}, 2, true, "C-130 route")
   D.escort = { group = gname, unit = gname .. "-1", callsign = callsign, start = start, dest = dest, destAb = destAb,
-               total = total, state = "hold", holdUntil = timer.getTime() + c.holdTime, wave = 1, mark = mark, interceptors = {} }
+               total = total, state = "hold", holdUntil = timer.getTime() + c.holdTime, wave = 1, mark = mark, interceptors = {}, engaged = {} }
   msg(string.format("ESCORT: %s (C-130) is holding at %s, angels %d, waiting for escort (up to %d min).\n"
     .. "Destination: %s, %d NM. Expect enemy interceptors en route – keep the Hercules alive!",
     callsign, bullseyeStr(start), math.floor(c.alt * 3.28084 / 1000 + 0.5), math.floor(c.holdTime / 60),
@@ -2857,9 +2856,19 @@ local function escortDepart(es)
   g:getController():setTask({ id = "Mission", params = { route = { points = pts } } })
 end
 
--- Abfangjäger: kommen aus Richtung Feindgebiet und jagen die C-130 (Route alle huntUpdate s neu)
+-- gezielter Angriff auf die C-130 (EngageGroup statt allgemeiner Luftziel-Suche, sonst lassen sie sich ablenken)
+local function escortEngageTask(es)
+  local g = Group.getByName(es.group)
+  local gid = g and g:isExist() and g:getID()
+  if gid then
+    return { number = 1, enabled = true, auto = false, id = "EngageGroup",
+             params = { groupId = gid, priority = 0, visible = false } }
+  end
+  return { number = 1, enabled = true, auto = false, id = "EngageTargets", params = { targetTypes = { "Air" }, priority = 0 } }
+end
+
 -- Abfangjäger: starten von der Startbahn des roten Platzes, der der Reststrecke der C-130 am nächsten ist
--- (Luftstart nur, wenn kein Platz passt) und jagen die C-130 (Route alle huntUpdate s neu, sobald in der Luft)
+-- (Luftstart nur, wenn kein Platz passt); Auftrag EngageGroup auf die C-130, nach dem Abheben noch einmal gesetzt
 local function escortIntercept(es, cp)
   local c, cap = D.cfg.escort, D.cfg.cap
   local mid = { x = (cp.x + es.dest.x) / 2, y = (cp.y + es.dest.y) / 2 }
@@ -2870,8 +2879,7 @@ local function escortIntercept(es, cp)
   local td = cap.tiers[D.currentCapTier()]
   local v = td.variants[math.random(#td.variants)]
   local lo = D.capLoadouts[v.loadout]
-  local tasks = { { number = 1, enabled = true, auto = false, id = "EngageTargets",
-                    params = { targetTypes = { "Air" }, priority = 0 } } }
+  local tasks = { escortEngageTask(es) }
   local function build(ground)
     local gname = nextId("INT")
     local sp, dir
@@ -2907,6 +2915,13 @@ local function escortIntercept(es, cp)
       route = { points = { first, airWP(cp, cap.alt, cap.speed * 1.2, tasks) } },
     })
     local g = Group.getByName(gname)
+    if g and g:isExist() then
+      -- nicht wegen Bedrohung abbrechen (Standard der KI), nur Raketen ausweichen; Waffen frei
+      local ctl = g:getController()
+      local air = AI.Option.Air
+      pcall(function() ctl:setOption(air.id.ROE, air.val.ROE.WEAPON_FREE) end)
+      pcall(function() ctl:setOption(air.id.REACTION_ON_THREAT, air.val.REACTION_ON_THREAT.EVADE_FIRE) end)
+    end
     return (g and g:isExist()) and gname or nil, sp
   end
   local ground = base ~= nil
@@ -2986,18 +3001,15 @@ function D.escortTick(now)
       escortIntercept(es, p)
       es.wave = es.wave + 1
     end
-    if now >= (es.nextHunt or 0) then
-      es.nextHunt = now + c.huntUpdate
-      for _, n in ipairs(es.interceptors) do
-        local g = Group.getByName(n)
-        local ip = groupPos(n)
+    -- Abfangjäger: einmalig nach dem Abheben (bzw. sofort bei Luftstart) gezielt auf die C-130 ansetzen
+    for _, n in ipairs(es.interceptors) do
+      local g = Group.getByName(n)
+      if g and g:isExist() and not es.engaged[n] then
         local up = false
-        for _, iu in ipairs((g and g:isExist() and g:getUnits()) or {}) do if iu:isExist() and iu:inAir() then up = true end end
-        if up and ip then   -- erst nach dem Start umleiten, sonst bricht die KI den Start ab
-          g:getController():setTask({ id = "Mission", params = { route = { points = {
-            airWP(ip, D.cfg.cap.alt, D.cfg.cap.speed, { { number = 1, enabled = true, auto = false, id = "EngageTargets",
-              params = { targetTypes = { "Air" }, priority = 0 } } }),
-            airWP(p, D.cfg.cap.alt, D.cfg.cap.speed * 1.2, {}) } } } })
+        for _, iu in ipairs(g:getUnits() or {}) do if iu:isExist() and iu:inAir() then up = true end end
+        if up then
+          es.engaged[n] = true
+          g:getController():pushTask(escortEngageTask(es))
         end
       end
     end
@@ -5940,12 +5952,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.64 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.65 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.64 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.65 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
