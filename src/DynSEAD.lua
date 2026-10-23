@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.52 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.53 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -507,6 +507,15 @@ D.cfg = {
     enabled      = true,
     maxActive    = 4,              -- gleichzeitig aktive feindliche CAP-Gruppen (auch mehrere vom selben Typ)
     huntUpdate   = 30,             -- s: Jagd-CAP ("hunt") fliegt immer zum nächsten Spieler in der Luft, Kurs alle X s neu
+    -- Dauer-CAP (F10 A2A > Respawning CAP an/aus): startet vom Boden eines feindlichen Flugplatzes (Startbahn),
+    -- patrouilliert an der nächsten aktiven AO und kommt nach Verlust wieder (aktuelle Schwierigkeit)
+    persistent   = {
+      groups       = 1,            -- gleichzeitig aktive Dauer-CAP-Gruppen (zählen nicht gegen maxActive)
+      respawnDelay = {300, 600},   -- s nach Verlust bis zum nächsten Start
+      minBlueDist  = 60000,        -- Startplatz mindestens so weit von jeder blauen Basis (m)
+      stuckTimeout = 900,          -- s: nie abgehoben -> entfernen und neu starten
+      patrolLength = 40000,        -- Länge des Racetracks (m)
+    },
     autoChance   = 0.0,            -- z.B. 0.3 = 30 % pro Intervall, 0 = nur per F10
     autoInterval = {900, 1800},
     difficulty   = 3,              -- 1 = nur Fox-2, 2 = frühe Fox-1, 3 = R-27 Fox-1, 4 = Fox-3
@@ -608,6 +617,8 @@ D.bombers       = {}
 D.fortress      = nil
 D.fortressBase  = nil
 D.caps          = {}
+D.capPersist    = {}
+D.capPersistOn  = false
 D.targetPool    = {}
 D.targetsTotal  = 0
 D.capturedCount = 0
@@ -2197,10 +2208,150 @@ function D.spawnCAP(tier, mode)
 end
 
 function D.removeCAPs()
-  if #D.caps == 0 then msg(D.cfg.awacs.callsignName .. ": No enemy CAP airborne.") return end
+  local n = #D.caps + #D.capPersist
+  if n == 0 then msg(D.cfg.awacs.callsignName .. ": No enemy CAP airborne.") return end
   for _, c in ipairs(D.caps) do destroyGroup(c.group) end
-  msg(string.format("%s: %d enemy CAP group(s) removed.", D.cfg.awacs.callsignName, #D.caps))
-  D.caps = {}
+  for _, c in ipairs(D.capPersist) do destroyGroup(c.group) end
+  D.caps, D.capPersist = {}, {}
+  msg(string.format("%s: %d enemy CAP group(s) removed.%s", D.cfg.awacs.callsignName, n,
+    D.capPersistOn and " Respawning CAP is still ON." or ""))
+end
+
+-- Dauer-CAP: Startplatz = feindlicher Flugplatz (weit genug von blauen Basen), der einer aktiven AO am nächsten ist
+function D.spawnPersistentCAP()
+  local cfg, pc = D.cfg.cap, D.cfg.cap.persistent
+  D.refreshBlueBases()
+  local aos = aoCandidates(nil)
+  local function nearestAO(p)
+    local b, bd
+    for _, ao in ipairs(aos) do
+      local d = dist(p, { x = ao.x, y = ao.y })
+      if not bd or d < bd then b, bd = ao, d end
+    end
+    return b, bd
+  end
+  local base, baseD
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local okc, desc = pcall(function() return ab:getDesc() end)
+    if okc and desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() == D.cfg.redSide
+       and not D.ignoredBase(ab) then
+      local p = toV2(ab:getPoint())
+      if farFrom(p, D.blueBases, pc.minBlueDist) then
+        local _, d = nearestAO(p)
+        if not d then local b = nearestBlueBase(p); d = b and dist(p, b) or 0 end
+        if not baseD or d < baseD then base, baseD = { ab = ab, p = p }, d end
+      end
+    end
+  end
+  if not base and #aos == 0 then return false end
+
+  -- Patrouillengebiet: nächste aktive AO, sonst Richtung nächste blaue Basis
+  local from = base and base.p or { x = aos[1].x, y = aos[1].y }
+  local ao = nearestAO(from)
+  local center
+  if ao then
+    center = { x = ao.x, y = ao.y }
+  else
+    local b = nearestBlueBase(from)
+    center = b and { x = from.x + 0.4 * (b.x - from.x), y = from.y + 0.4 * (b.y - from.y) } or from
+  end
+  local hdg = math.atan2(center.y - from.y, center.x - from.x)
+  local p1 = offset(center, hdg + math.pi / 2, pc.patrolLength / 2)
+  local p2 = offset(center, hdg - math.pi / 2, pc.patrolLength / 2)
+
+  local td = cfg.tiers[D.currentCapTier()]
+  local v = td.variants[math.random(#td.variants)]
+  local lo = D.capLoadouts[v.loadout]
+  local tasks = {
+    { number = 1, enabled = true, auto = false, id = "EngageTargets",
+      params = { targetTypes = { "Air" }, priority = 0, maxDistEnabled = true, maxDist = 80000 } },
+    { number = 2, enabled = true, auto = false, id = "Orbit",
+      params = { pattern = "Race-Track", point = p1, point2 = p2, speed = cfg.speed, altitude = cfg.alt } },
+  }
+  local function build(ground)
+    local gname = nextId("RCAP")
+    local start = ground and base.p or offset(center, hdg + math.pi, 30000)
+    local units = {}
+    for i = 1, cfg.size do
+      units[i] = {
+        name = gname .. "-" .. i, type = v.type,
+        x = start.x - 30 * (i - 1), y = start.y + 30 * (i - 1),
+        alt = ground and land.getHeight(start) or cfg.alt, alt_type = "BARO",
+        speed = ground and 0 or cfg.speed, heading = hdg, skill = td.skill or D.cfg.skill,
+        payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil,
+      }
+    end
+    local first
+    if ground then
+      first = { x = start.x, y = start.y, alt = land.getHeight(start), alt_type = "BARO", type = "TakeOff",
+        action = "From Runway", airdromeId = base.ab:getID(), speed = 0, speed_locked = true,
+        ETA = 0, ETA_locked = false, task = { id = "ComboTask", params = { tasks = {} } } }
+    else
+      first = airWP(start, cfg.alt, cfg.speed, {})
+    end
+    coalition.addGroup(D.cfg.redCountry, Group.Category.AIRPLANE, {
+      name = gname, task = "CAP", uncontrolled = false, units = units,
+      route = { points = { first, airWP(p1, cfg.alt, cfg.speed, tasks), airWP(p2, cfg.alt, cfg.speed, {}) } },
+    })
+    local g = Group.getByName(gname)
+    return (g and g:isExist()) and gname or nil
+  end
+  local ground = base ~= nil
+  local gname = ground and build(true)
+  if not gname then ground = false; gname = build(false) end
+  if not gname then return false end
+  D.capPersist[#D.capPersist + 1] = { group = gname, spawned = timer.getTime() }
+  msg(string.format("%s: Respawning enemy CAP – %dx %s, %s, %s, patrolling %s.",
+    D.cfg.awacs.callsignName, cfg.size, v.type, td.label,
+    ground and ("taking off from " .. base.ab:getName()) or ("airborne near " .. bullseyeStr(center)),
+    ao and ("near " .. ao.name) or bullseyeStr(center)))
+  return true
+end
+
+function D.capPersistTick(now)
+  local pc = D.cfg.cap.persistent
+  local alive = 0
+  for i = #D.capPersist, 1, -1 do
+    local c = D.capPersist[i]
+    local n = groupAliveCount(c.group)
+    local airborne = false
+    if n > 0 then
+      for _, u in ipairs(Group.getByName(c.group):getUnits()) do
+        if u:isExist() and u:inAir() then airborne = true end
+      end
+    end
+    if airborne then c.wasAirborne = true end
+    -- gelandet (z. B. RTB ohne Sprit) oder nie abgehoben: entfernen und neu starten
+    local stale = n > 0 and not airborne and (c.wasAirborne or now - c.spawned > pc.stuckTimeout)
+    if n == 0 or stale then
+      if stale then
+        destroyGroup(c.group)
+      else
+        D.stats.cap = D.stats.cap + 1
+        msg(D.cfg.awacs.callsignName .. ": Respawning hostile CAP destroyed.")
+      end
+      table.remove(D.capPersist, i)
+      D.capPersistNext = now + randRange(pc.respawnDelay)
+    else
+      alive = alive + 1
+    end
+  end
+  if D.capPersistOn and alive < pc.groups and now >= (D.capPersistNext or 0) then
+    D.capPersistNext = now + 60
+    D.spawnPersistentCAP()
+  end
+end
+
+function D.toggleCapPersist()
+  local pc = D.cfg.cap.persistent
+  D.capPersistOn = not D.capPersistOn
+  if D.capPersistOn then
+    D.capPersistNext = 0
+    msg(string.format("%s: Respawning enemy CAP ON – %d group(s) at current difficulty, launching from the enemy airfield nearest to an active AO, back %d-%d min after each loss.",
+      D.cfg.awacs.callsignName, pc.groups, math.floor(pc.respawnDelay[1] / 60), math.floor(pc.respawnDelay[2] / 60)))
+  else
+    msg(D.cfg.awacs.callsignName .. ": Respawning enemy CAP OFF – groups still airborne stay until destroyed (or use Remove all).")
+  end
 end
 
 -------------------------------------------------------------------------------
@@ -4193,6 +4344,7 @@ function D.update()
   D.fortressTick(now)
 
   -- CAP
+  D.capPersistTick(now)
   for i = #D.caps, 1, -1 do
     local c = D.caps[i]
     if c.hunt and groupAliveCount(c.group) > 0 and now >= (c.nextHunt or 0) then
@@ -4356,6 +4508,7 @@ function D.buildMenu()
           function() D.spawnCAP(i, m[1]) end)
       end
     end
+    cmd(capMenu, "Respawning CAP: toggle ON/OFF", D.toggleCapPersist)
     cmd(capMenu, "Remove all enemy CAPs", D.removeCAPs)
   end
 
@@ -4792,12 +4945,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.52 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.53 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.52 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.53 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
