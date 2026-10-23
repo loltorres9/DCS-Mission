@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.58 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.59 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -542,7 +542,7 @@ D.cfg = {
       startOn     = true,          -- F10 A2A > "Enemy helicopters: toggle ON/OFF"
       maxActive   = 2,
       interval    = {300, 900},
-      types       = { "Mi-8MT", "Mi-24V" },
+      types       = { "Mi-8MT" },      -- nur Transporthubschrauber, unbewaffnet (keine Pylone, Bordwaffen ohne Munition)
       size        = {1, 2},
       alt         = 150,           -- m über Grund
       speed       = 55,
@@ -2592,7 +2592,7 @@ function D.spawnSkirmish()
   return false
 end
 
--- Feindlicher Hubschrauber: Luftstart über einem roten Flugplatz, Landung auf einem anderen
+-- Feindlicher Hubschrauber (unbewaffnet): Luftstart über einem roten Flugplatz, Landung auf einem anderen
 function D.spawnHelo()
   local c = D.cfg.chaos.helos
   local bases = redAirbases(c.minBlueDist)
@@ -2608,7 +2608,8 @@ function D.spawnHelo()
       local units = {}
       for i = 1, math.random(c.size[1], c.size[2]) do
         units[i] = { name = gname .. "-" .. i, type = typ, x = start.x - 60 * (i - 1), y = start.y - 60 * (i - 1),
-                     alt = c.alt, alt_type = "RADIO", speed = c.speed, heading = hdg, skill = D.cfg.skill }
+                     alt = c.alt, alt_type = "RADIO", speed = c.speed, heading = hdg, skill = D.cfg.skill,
+                     payload = { pylons = {}, fuel = 1929, flare = 0, chaff = 0, gun = 0 } }
       end
       local wp1 = airWP(start, c.alt, c.speed, {})
       wp1.alt_type = "RADIO"
@@ -5283,12 +5284,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.58 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.59 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.58 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.59 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
