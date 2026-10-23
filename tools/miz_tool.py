@@ -176,16 +176,18 @@ def cmd_embed(a):
     miz.save(a.out)
 
 # ----------------------------------------------------------------- templates
-# max. WP = Zielpunkte nach dem Startpunkt: F-16 Navigations-Steuerpunkte 1–25 (Handbuch: ME-Wegpunkt 0 = Start, 1..n = STPT 1..n
-# in Route 1; 26–30 Markpoints, 81–99 nur per DTC), F/A-18 WP 0–59, Viggen B1–B9,
+# Zielpunkte liegen auf Bodenhöhe (AGL 0, "RADIO"), damit Sensoren/Pod auf den Steuerpunkt schauen (Empfehlung F-16-Handbuch).
+# max. WP = Zielpunkte nach dem Startpunkt: F-16 volle Route auf Wunsch des Nutzers (Handbuch: ME-Wegpunkt 0 = Start,
+# 1..n = STPT 1..n; Navigationsbereich nur 1–25, dahinter Markpoints/Geo-Linien – Verhalten ab 26 im Spiel prüfen),
+# F/A-18 WP 0–59, Viggen B1–B9,
 # AH-64D W01–W50, CH-47F angenommen wie AH-64D; reicht der Speicher nicht, wird die Route gleichmäßig ausgedünnt
-TYPES = [  # typ, Kategorie, Gruppen-Task, Land(id,name), Höhe m, Höhentyp, Speed m/s, max. WP, Sprit kg, Label
-    ("F-16C_50",      "planes",      "CAP",           (2, "USA"),     7620, "BARO",  220.97, 25, 3104, "F-16"),
-    ("FA-18C_hornet", "planes",      "CAP",           (2, "USA"),     7620, "BARO",  220.97, 59, 4900, "F/A-18C"),
-    ("A-10C_2",       "planes",      "CAS",           (2, "USA"),     4572, "BARO",  150.0,  99, 5029, "A-10C II"),
-    ("AJS37",         "planes",      "Ground Attack", (46, "Sweden"), 3000, "BARO",  220.97,  9, 4476, "AJS-37"),
-    ("AH-64D_BLK_II", "helicopters", "CAS",           (2, "USA"),      150, "RADIO",  55.0,  49, 1438, "AH-64D"),
-    ("CH-47Fbl1",     "helicopters", "Transport",     (2, "USA"),      150, "RADIO",  60.0,  49, 3600, "CH-47F"),   # nur, wenn das Lager den Typ führt
+TYPES = [  # typ, Kategorie, Gruppen-Task, Land(id,name), Zielpunkt-Höhe m, Höhentyp, Speed m/s, max. WP, Sprit kg, Label
+    ("F-16C_50",      "planes",      "CAP",           (2, "USA"),        0, "RADIO", 220.97, 99, 3104, "F-16"),
+    ("FA-18C_hornet", "planes",      "CAP",           (2, "USA"),        0, "RADIO", 220.97, 59, 4900, "F/A-18C"),
+    ("A-10C_2",       "planes",      "CAS",           (2, "USA"),        0, "RADIO", 150.0,  99, 5029, "A-10C II"),
+    ("AJS37",         "planes",      "Ground Attack", (46, "Sweden"),    0, "RADIO", 220.97,  9, 4476, "AJS-37"),
+    ("AH-64D_BLK_II", "helicopters", "CAS",           (2, "USA"),        0, "RADIO",  55.0,  49, 1438, "AH-64D"),
+    ("CH-47Fbl1",     "helicopters", "Transport",     (2, "USA"),        0, "RADIO",  60.0,  49, 3600, "CH-47F"),   # nur, wenn das Lager den Typ führt
 ]
 
 def cmd_templates(a):
