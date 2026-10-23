@@ -7,6 +7,7 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
   python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [--keep] [--targets] [-o OUT.miz]   (Caucasus, Syria)
   python tools/miz_tool.py reroute   MISSION.miz [--targets] [-o OUT.miz]   Wegpunkte aller Vorlagen neu: nur Startpunkt
                                      (Standard; AO-Koordinaten per F10-Menü) oder mit --targets eine gemeinsame Route über alle Ziele
+  python tools/miz_tool.py untemplate MISSION.miz [-o OUT.miz]   alle Dynamic-Spawn-Vorlagen und ihre Warehouse-Links entfernen
   python tools/miz_tool.py tplside   MISSION.miz neutral|blue [-o OUT.miz]   Vorlagen in neutrales Land (Schweiz) verschieben / zurück
   python tools/miz_tool.py options   MISSION.miz optionsView=optview_all --forced [-o OUT.miz]
   python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio [1-3]] [-o OUT.miz]
@@ -295,6 +296,29 @@ def cmd_reroute(a):
     print("Wegpunkte neu gesetzt:", n, "Vorlagen | Route (%d Ziele): %s" % (len(route), ", ".join(table[t][0] for t in route)))
     miz.save(a.out)
 
+# ----------------------------------------------------------------- untemplate
+def cmd_untemplate(a):
+    """Alle Vorlagen (dynSpawnTemplate) löschen: Dynamic Spawn geht auch ohne, die Vorlagen erscheinen sonst als Slots"""
+    miz = Miz(a.miz)
+    m, w = miz.table("mission"), miz.table("warehouses")
+    n = 0
+    for side in ALL_SIDES:
+        for c in m["coalition"][side].get("country", {}).values():
+            for cat in ("plane", "helicopter"):
+                if cat not in c: continue
+                grp = c[cat].get("group", {})
+                keep = [g for g in grp.values() if not g.get("dynSpawnTemplate")]
+                n += len(grp) - len(keep)
+                if keep: c[cat]["group"] = {i + 1: g for i, g in enumerate(keep)}
+                else: del c[cat]
+    links = 0
+    for ap in w["airports"].values():
+        for cat in ("planes", "helicopters"):
+            for e in ap.get("aircrafts", {}).get(cat, {}).values():
+                if e.pop("linkDynTempl", None) is not None: links += 1
+    print("Vorlagen entfernt: %d | Warehouse-Links entfernt: %d" % (n, links))
+    miz.save(a.out)
+
 # ----------------------------------------------------------------- tplside
 NEUTRAL_TPL_COUNTRY = (22, "Switzerland")   # in beiden Missionen in der neutralen Koalition
 
@@ -442,6 +466,7 @@ if __name__ == "__main__":
     s.add_argument("--targets", action="store_true", help="gemeinsame Route über alle Ziele statt nur Startpunkt")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
     s = sp.add_parser("reroute"); s.add_argument("miz"); s.add_argument("--targets", action="store_true", help="gemeinsame Route über alle Ziele statt nur Startpunkt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_reroute)
+    s = sp.add_parser("untemplate"); s.add_argument("miz"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_untemplate)
     s = sp.add_parser("tplside"); s.add_argument("miz"); s.add_argument("side", choices=["neutral", "blue"]); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_tplside)
     s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all; mit --forced entfernt KEY= den Eintrag"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")

@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.46 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.51 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -58,7 +58,10 @@ D.cfg = {
     samPerAO        = {2, 3},
     casPerAO        = {1, 2},
     garrison        = true,
-    garrisonPercent = 70,
+    garrisonPercent = 100,         -- Garnison muss ganz zerstört werden (Nachzügler-Regel siehe straggler)
+    -- Nachzügler: bleiben von Garnison bzw. einer SAM-Stellung höchstens maxLeft Einheiten übrig, gilt sie nach
+    -- timeout s trotzdem als zerstört (Rest wird entfernt) – damit eine einzelne unauffindbare Einheit nichts blockiert
+    straggler       = { maxLeft = 1, timeout = 1200 },
     exclude         = {},          -- z.B. { "Mozdok", "Beslan" }
     maxDistance     = 0,           -- 0 = egal; sonst max. Entfernung zur nächsten blauen Basis
     aoSeparation    = 85000,       -- Mindestabstand der Mittelpunkte gleichzeitig aktiver AOs (m), ca. 2 x aoRadius + Puffer: Kreise überlappen nicht
@@ -140,39 +143,42 @@ D.cfg = {
     respawnDelay      = {120, 300},
     minSeparation     = 12000,
     shoradChance      = 0.5,
+    killAll           = true,      -- Stellung erst zerstört, wenn ALLE Einheiten zerstört sind: Radare, Gefechtsstände, Startgeräte, Nahbereichsflak und Punktverteidigung
     cleanupAfter      = 900,
     armEvasion = {
       enabled       = true,
       vanilla       = false,       -- DCS-eigenes "Evasion of ARM" zusätzlich aktivieren
       -- Entdeckung der anfliegenden ARM durch das Radar der Stellung:
       -- Chance pro Sekunde, solange die ARM in Reichweite UND Sichtlinie ist (bei Referenzhöhe)
-      detectRate      = { SA2 = 0.02, SA3 = 0.02, SA6 = 0.03, SA11 = 0.04, SA8 = 0.04, SA15 = 0.06, SA5 = 0.03, SA10 = 0.06 },
-      defaultRate     = 0.03,
+      -- v4.50 deutlich gesenkt (vorher 0.02–0.06): Crews erkennen eine ARM grob nur noch in 25–50 % der Fälle
+      detectRate      = { SA2 = 0.005, SA3 = 0.005, SA6 = 0.007, SA11 = 0.008, SA8 = 0.008, SA15 = 0.012, SA5 = 0.006, SA10 = 0.012 },
+      defaultRate     = 0.007,
       detectRange     = { SA2 = 40000, SA3 = 30000, SA6 = 30000, SA11 = 40000, SA8 = 20000, SA15 = 25000, SA5 = 50000, SA10 = 60000 },
       defaultRange    = 30000,
       altRef          = 3000,        -- m über Grund, bei der Höhenfaktor 1 gilt
       altFactor       = {0.2, 1.5},  -- tief anfliegend = schwer zu sehen, hoch = leicht
       reactionDelay   = {4, 10},     -- s von Entdeckung bis Radar aus
-      launchAlert     = 0.5,         -- Chance, dass der Start selbst bemerkt wird (Shooter im Radar)
-      alertMultiplier = 3,           -- dann ist die Crew aufmerksamer
-      recover       = {120, 300},  -- Radar bleibt nach Einschlag/Vorbeiflug X s unterdrückt
+      launchAlert     = 0.3,         -- Chance, dass der Start selbst bemerkt wird (Shooter im Radar)
+      alertMultiplier = 2,           -- dann ist die Crew aufmerksamer
+      maxEvasions     = 1,           -- Radar höchstens 1x zum Ausweichen abschalten, danach bleibt die Crew auf Sendung
+      recover       = {40, 90},    -- Radar bleibt nach Einschlag/Vorbeiflug X s unterdrückt (vorher 120–300)
       maxAngle      = 20,          -- Grad: Zielzuordnung über Flugrichtung, falls kein direktes Ziel
     },
     relocate = {
       enabled       = true,
       -- Chance auf Stellungswechsel nach HARM-Ausweichen (nur mobile Systeme)
-      chance        = { SA6 = 0.6, SA8 = 0.8, SA11 = 0.5, SA15 = 0.8 },
+      chance        = { SA6 = 0.25, SA8 = 0.35, SA11 = 0.2, SA15 = 0.35 },
       -- Chance auf Stellungswechsel beim normalen Abschalten im Blink-Modus
-      onBlinkChance = { SA6 = 0.15, SA8 = 0.25, SA11 = 0.1, SA15 = 0.25 },
+      onBlinkChance = { SA6 = 0.05, SA8 = 0.1, SA11 = 0.05, SA15 = 0.1 },
       distance      = {2000, 6000},
       speed         = 10,          -- m/s Gelände
       timeout       = 900,
       setupTime     = {30, 90},    -- Aufbauzeit am neuen Ort (Radar dunkel)
     },
     pointDefense = {
-      chance = 0.4,                -- Chance auf eigenständige SA-15 als Punktverteidigung
-      types  = { SA2 = true, SA6 = true, SA11 = true },
-      unit   = "Tor 9A331",
+      chance = 0.4,                -- Chance auf eigenständige SA-8 als Punktverteidigung der Mittelstrecken-Stellungen
+      types  = { SA2 = true, SA3 = true, SA6 = true, SA11 = true },
+      unit   = "Osa 9A33 ln",      -- früher SA-15 (Tor 9A331), auf Nutzerwunsch schwächer
       dist   = 600,
     },
     -- Ungefähre Einsatzreichweite je Typ (m); Hinterhalt schaltet bei Reichweite * ambushFactor ein
@@ -1152,9 +1158,11 @@ local function buildSamUnits(def, c, gname)
   end
   local critTrack = (def.critical == "track" or def.critical == "all")
   local critLn = (def.critical == "ln" or def.critical == "all")
+  local all = D.cfg.sam.killAll
+  if all then critTrack, critLn = true, true end
   for _, t in ipairs(def.track or {}) do add(t, 0, 0, critTrack) end
-  for i, t in ipairs(def.search or {}) do add(t, -180 * i, 120, false) end
-  for i, t in ipairs(def.extra or {}) do add(t, 120 * i, -150, false) end
+  for i, t in ipairs(def.search or {}) do add(t, -180 * i, 120, all) end
+  for i, t in ipairs(def.extra or {}) do add(t, 120 * i, -150, all) end
   for i = 1, def.nLn do
     local a = hdg + (i - 1) * 2 * math.pi / def.nLn
     add(def.ln, def.r * math.cos(a), def.r * math.sin(a), critLn)
@@ -1162,7 +1170,7 @@ local function buildSamUnits(def, c, gname)
   if math.random() < D.cfg.sam.shoradChance then
     for _ = 1, math.random(1, 2) do
       local a = math.random() * 2 * math.pi
-      add(D.shoradTypes[math.random(#D.shoradTypes)], 400 * math.cos(a), 400 * math.sin(a), false)
+      add(D.shoradTypes[math.random(#D.shoradTypes)], 400 * math.cos(a), 400 * math.sin(a), D.cfg.sam.killAll)
     end
   end
   return units, crit
@@ -1237,6 +1245,7 @@ function D.createSam(ao, key, p, forceMode)
       name = site.pdGroup, task = "Ground Nothing", hidden = D.hideOnMap(),
       units = { { name = site.pdGroup .. "-1", type = pd.unit, x = pp.x, y = pp.y,
                   heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false } } })
+    if D.cfg.sam.killAll then site.critical[#site.critical + 1] = site.pdGroup .. "-1" end
   end
 
   D.sites[#D.sites + 1] = site
@@ -1430,7 +1439,7 @@ function D.updateArms()
       if s and s ~= a.cand then a.cand, a.reactAt = s, nil end   -- Zielwechsel: neu bewerten
       if s then
         -- Entdeckung: nur wenn das Radar sendet, die ARM in Reichweite ist und Sichtlinie besteht
-        if not a.reactAt and s.radarOn then
+        if not a.reactAt and s.radarOn and (s.evasions or 0) < (cfg.maxEvasions or math.huge) then
           local rp = toV3(s.pos)
           rp.y = rp.y + 15
           local dx, dy, dz = rp.x - p.x, rp.y - p.y, rp.z - p.z
@@ -1446,6 +1455,7 @@ function D.updateArms()
         -- Reaktion der Crew (kommt evtl. zu spät, wenn die ARM vorher einschlägt)
         if a.reactAt and now >= a.reactAt then
           a.site = s
+          if not s.armDark then s.evasions = (s.evasions or 0) + 1 end
           s.armDark = (s.armDark or 0) + 1
           D.setRadar(s, false)
         end
@@ -3637,11 +3647,29 @@ function D.captureAO(ao)
   D.repositionTankers()
 end
 
+-- Nachzügler-Regel: höchstens straggler.maxLeft Einheiten übrig -> nach straggler.timeout s erledigt (obj merkt sich den Start)
+function D.stragglerDone(obj, alive, now, label)
+  local c = D.cfg.campaign.straggler
+  if not c or alive > c.maxLeft then obj.stragglerSince = nil return false end
+  if not obj.stragglerSince then
+    obj.stragglerSince = now
+    msg(string.format("%s: %d unit%s left – counts as destroyed in %d min if not found.",
+      label, alive, alive == 1 and "" or "s", math.floor(c.timeout / 60 + 0.5)))
+    return false
+  end
+  return now - obj.stragglerSince >= c.timeout
+end
+
 function D.checkAOs(now)
   for _, ao in ipairs(D.aos) do
     if ao.garrison and not ao.garrisonDone then
-      local destroyed = 1 - groupAliveCount(ao.garrison) / ao.garrisonInit
-      if destroyed * 100 >= D.cfg.campaign.garrisonPercent then
+      local alive = groupAliveCount(ao.garrison)
+      local destroyed = 1 - alive / ao.garrisonInit
+      ao.garrisonStraggler = ao.garrisonStraggler or {}
+      local strag = alive > 0 and D.stragglerDone(ao.garrisonStraggler, alive, now,
+        string.format("[%s] Airfield garrison", ao.name))
+      if strag or destroyed * 100 >= D.cfg.campaign.garrisonPercent then
+        if strag then destroyGroup(ao.garrison) end
         ao.garrisonDone = true
         msg(string.format("[%s] Airfield garrison neutralized.", ao.name))
       end
@@ -4034,7 +4062,8 @@ function D.reportCampaign()
     lines[#lines + 1] = string.format("• %s%s\n   SAM left: %d | CAS left: %d | Garrison: %s\n   %s",
       ao.name .. (ao.front and (" – " .. ao.front.name .. " front") or ""), ao.state == "capturing" and " (capture in progress)" or "",
       ao.samLeft + ao.samActive, ao.casLeft + ao.casActive,
-      ao.garrison and (ao.garrisonDone and "neutralized" or "active") or "–",
+      ao.garrison and (ao.garrisonDone and "neutralized"
+        or string.format("%d/%d left", groupAliveCount(ao.garrison), ao.garrisonInit)) or "–",
       D.fmtPos({ x = ao.x, y = ao.y }))
   end
   if D.cfg.fortress.enabled then lines[#lines + 1] = D.fortressStatus() end
@@ -4060,9 +4089,15 @@ function D.update()
   -- SAM
   for i = #D.sites, 1, -1 do
     local s = D.sites[i]
-    local dead = true
+    local alive = 0
     for _, n in ipairs(s.critical) do
-      if unitAlive(n) then dead = false break end
+      if unitAlive(n) then alive = alive + 1 end
+    end
+    local dead = alive == 0
+    if not dead and D.stragglerDone(s, alive, now, string.format("SEAD [%s]: %s site", s.ao.name, s.def.name)) then
+      dead = true
+      destroyGroup(s.group)
+      if s.pdGroup then destroyGroup(s.pdGroup) end
     end
     if dead then
       table.remove(D.sites, i)
@@ -4701,12 +4736,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.46 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.51 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.46 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.51 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
