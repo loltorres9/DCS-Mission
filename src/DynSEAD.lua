@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.48 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.49 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -143,7 +143,7 @@ D.cfg = {
     respawnDelay      = {120, 300},
     minSeparation     = 12000,
     shoradChance      = 0.5,
-    killAll           = true,      -- Stellung erst zerstört, wenn alle Radare, Gefechtsstände UND Startgeräte zerstört sind (Nahbereichsflak zählt nicht)
+    killAll           = true,      -- Stellung erst zerstört, wenn ALLE Einheiten zerstört sind: Radare, Gefechtsstände, Startgeräte, Nahbereichsflak und Punktverteidigung
     cleanupAfter      = 900,
     armEvasion = {
       enabled       = true,
@@ -1168,7 +1168,7 @@ local function buildSamUnits(def, c, gname)
   if math.random() < D.cfg.sam.shoradChance then
     for _ = 1, math.random(1, 2) do
       local a = math.random() * 2 * math.pi
-      add(D.shoradTypes[math.random(#D.shoradTypes)], 400 * math.cos(a), 400 * math.sin(a), false)
+      add(D.shoradTypes[math.random(#D.shoradTypes)], 400 * math.cos(a), 400 * math.sin(a), D.cfg.sam.killAll)
     end
   end
   return units, crit
@@ -1243,6 +1243,7 @@ function D.createSam(ao, key, p, forceMode)
       name = site.pdGroup, task = "Ground Nothing", hidden = D.hideOnMap(),
       units = { { name = site.pdGroup .. "-1", type = pd.unit, x = pp.x, y = pp.y,
                   heading = math.random() * 2 * math.pi, skill = D.cfg.skill, playerCanDrive = false } } })
+    if D.cfg.sam.killAll then site.critical[#site.critical + 1] = site.pdGroup .. "-1" end
   end
 
   D.sites[#D.sites + 1] = site
@@ -4093,6 +4094,7 @@ function D.update()
     if not dead and D.stragglerDone(s, alive, now, string.format("SEAD [%s]: %s site", s.ao.name, s.def.name)) then
       dead = true
       destroyGroup(s.group)
+      if s.pdGroup then destroyGroup(s.pdGroup) end
     end
     if dead then
       table.remove(D.sites, i)
@@ -4731,12 +4733,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.48 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.49 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.48 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.49 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
