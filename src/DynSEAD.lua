@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.51 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.61 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -182,7 +182,10 @@ D.cfg = {
       dist   = 600,
     },
     -- Ungefähre Einsatzreichweite je Typ (m); Hinterhalt schaltet bei Reichweite * ambushFactor ein
-    engageRange       = { SA2 = 45000, SA3 = 25000, SA6 = 25000, SA11 = 35000, SA8 = 10000, SA15 = 12000, SA5 = 150000, SA10 = 90000 },
+    engageRange       = { SA2 = 45000, SA3 = 25000, SA6 = 25000, SA11 = 35000, SA8 = 10000, SA15 = 12000, SA5 = 150000, SA10 = 90000,
+                          AAA100 = 12000, AAA57 = 6000 },
+    -- schwere Flak mit Fire-Can-Radar (SON-9) als zusätzliches Ziel in einer AO (zählt wie eine SAM-Stellung, auch für die Eroberung)
+    aaa               = { chance = 0.6, pool = { AAA100 = 1, AAA57 = 1 } },
     ambushFactor      = 1.5,
     ambushHold        = 90,        -- Radar bleibt nach Auslösen mind. X s an
     ambushRange       = 30000,     -- Fallback für Typen ohne engageRange
@@ -191,6 +194,8 @@ D.cfg = {
     modes             = { always = 2, blink = 2, ambush = 1 },   -- Fallback
     -- Radar-Verhalten je Typ (Gewichtung): große Systeme senden meist, SHORAD lauert
     modesByType = {
+      AAA100 = { always = 2, blink = 1 },
+      AAA57  = { always = 2, blink = 1 },
       SA2  = { always = 3, blink = 2 },
       SA3  = { always = 2, blink = 2, ambush = 1 },
       SA6  = { always = 2, blink = 2, ambush = 1 },
@@ -503,9 +508,115 @@ D.cfg = {
     cleanupAfter   = 600,
   },
 
+  -- SAM-Hinterhalte tief im Feindgebiet: einzelne Stellungen im Modus "ambush" (Radar erst bei Annäherung an),
+  -- nur HINTER den aktiven AOs (weiter von der nächsten blauen Basis entfernt als die nächste AO + Radius + margin),
+  -- nie zwischen eigenen Basen und den aktiven AOs; ohne Meldung, nicht im Lagebild, zählen nicht für die Eroberung
+  ambush = {
+    enabled      = true,
+    maxActive    = 3,
+    interval     = {600, 1200},    -- s zwischen zwei Spawn-Versuchen
+    -- ältere, weniger tödliche Systeme (Nutzerwunsch); ohne SA-8-Punktverteidigung
+    pool         = { SA3 = 3, SA2 = 2, SA6 = 2 },
+    margin       = 15000,          -- m hinter dem AO-Rand (von blauen Basen aus gesehen)
+    baseRadius   = {8000, 40000},  -- Abstand zum gewählten roten Flugplatz
+    maxBlueDist  = 250000,         -- nicht weiter als X m von der nächsten blauen Basis (dort fliegt niemand)
+    lifetime     = {3600, 7200},   -- s; danach abgebaut, sofern kein Spieler näher als despawnRange ist
+    despawnRange = 60000,
+  },
+
+  -- "Chaos" im Feindgebiet (Syrien der 2010er): kleine Gefechte, feindliche Hubschrauber
+  chaos = {
+    skirmish = {                   -- kleine KI-Gefechte: US-Gerät (blau) gegen Regierungstruppen (rot)
+      enabled     = true,
+      maxActive   = 3,
+      interval    = {300, 600},    -- s zwischen zwei neuen Gefechten
+      size        = {4, 6},        -- Fahrzeuge je Seite
+      gap         = {1500, 2500},  -- Anfangsabstand der Linien (m)
+      lifetime    = {1800, 3600},  -- s; danach abgebaut, wenn kein Spieler näher als 20 km
+      minBlueDist = 30000,         -- m von jeder blauen Basis
+      blue = { "M-2 Bradley", "M1126 Stryker ICV", "M1043 HMMWV Armament", "M-113" },
+      red  = { "T-72B", "BMP-2", "BTR-80", "T-55" },
+    },
+    helos = {                      -- feindliche Hubschrauber zwischen roten Flugplätzen (Gelegenheitsziele, ROE Waffen halten)
+      enabled     = true,
+      startOn     = true,          -- F10 A2A > "Enemy helicopters: toggle ON/OFF"
+      maxActive   = 2,
+      interval    = {300, 900},
+      types       = { "Mi-8MT" },      -- nur Transporthubschrauber, unbewaffnet (keine Pylone, Bordwaffen ohne Munition)
+      size        = {1, 2},
+      alt         = 150,           -- m über Grund
+      speed       = 55,
+      dist        = {30000, 150000},  -- Strecke zwischen Start- und Zielplatz
+      minBlueDist = 40000,
+      timeout     = 3600,
+    },
+  },
+
+  -- Scud-Jagd: ein Scud-Werfer baut sich im Hinterland auf und feuert nach setupTime echte Raketen (FireAtPoint)
+  -- auf die nächste blaue Basis in Reichweite; Overlord meldet nur ein grobes Gebiet (Kreis auf der Karte)
+  scud = {
+    enabled       = true,
+    interval      = {1800, 3600},  -- s zwischen zwei Scud-Einsätzen (nach Ende des vorigen)
+    setupTime     = {1200, 1500},  -- s von der Meldung bis zum Feuerbefehl (dann noch Aufrichten des Werfers)
+    range         = {80000, 280000},  -- Entfernung zum Ziel (Scud-B: ca. 50–300 km)
+    areaRadius    = 37000,         -- Radius des gemeldeten Suchgebiets (20 NM); der Werfer liegt irgendwo darin
+    salvo         = 1,
+    impactRadius  = 300,
+    fireTimeout   = 480,           -- s nach Feuerbefehl ohne Abschuss-Ereignis -> Einschlag wird nachgestellt
+    fallbackPower = 800,           -- Sprengkraft des nachgestellten Einschlags
+    escort        = { "Ural-375", "UAZ-469" },
+    minBlueDist   = 60000,
+  },
+
+  -- Eskorte: eine verbündete C-130 fliegt vom hintersten zum vordersten eigenen Flugplatz; sie wartet am Treffpunkt
+  -- auf Begleitschutz, unterwegs starten feindliche Abfangjäger gegen sie (aktuelle CAP-Stufe)
+  escort = {
+    enabled       = true,
+    autoInterval  = {3600, 5400},  -- s zwischen automatischen Eskortaufträgen (0/nil = nur per F10)
+    type          = "C-130",
+    alt           = 6000,          -- m
+    speed         = 140,           -- m/s
+    minRoute      = 120000,        -- Mindeststrecke; sonst Start in der Luft weiter hinten
+    holdTime      = 900,           -- s am Treffpunkt warten, bis ein Spieler-Jet näher als joinDist ist
+    joinDist      = 18500,         -- 10 NM
+    waves         = { 0.3, 0.65 }, -- Abfangwellen bei diesem Anteil der Strecke (zweite nur ab longRoute)
+    longRoute     = 200000,
+    interceptDist = 90000,         -- Abfangjäger erscheinen so weit von der C-130 entfernt, Richtung Feindgebiet
+    huntUpdate    = 30,
+  },
+
+  -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
+  -- müssen per Hubschrauber abgeholt und zu einem eigenen Flugplatz/FARP gebracht werden; Feindfahrzeuge rücken an
+  csar = {
+    enabled       = true,
+    playerEject   = true,
+    allyInterval  = {2700, 5400},  -- s zwischen zufälligen Verbündeten-Abschüssen (0/nil = aus)
+    maxActive     = 2,
+    timeout       = 7200,          -- s; danach gilt ein nicht abgeholter Pilot als verloren
+    enemyGroups   = {1, 2},
+    enemySize     = {2, 3},
+    enemyTypes    = { "BTR-80", "UAZ-469", "BRDM-2" },
+    enemyDist     = {4000, 7000},  -- Startentfernung der anrückenden Feinde
+    enemySpeed    = 2.5,           -- m/s (ca. 30-45 min bis zum Piloten)
+    captureDist   = 150,
+    pickupDist    = 80,            -- gelandeter Hubschrauber so nah am Piloten -> an Bord
+    deliverDist   = 3000,          -- Landung so nah an einer blauen Basis/FARP -> gerettet
+    smokeDist     = 6000,          -- Hubschrauber in dieser Entfernung -> grüner Rauch (alle 5 min)
+  },
+
   cap = {
     enabled      = true,
-    maxActive    = 1,
+    maxActive    = 4,              -- gleichzeitig aktive feindliche CAP-Gruppen (auch mehrere vom selben Typ)
+    huntUpdate   = 30,             -- s: Jagd-CAP ("hunt") fliegt immer zum nächsten Spieler in der Luft, Kurs alle X s neu
+    -- Dauer-CAP (F10 A2A > Respawning CAP an/aus): startet vom Boden eines feindlichen Flugplatzes (Startbahn),
+    -- patrouilliert an der nächsten aktiven AO und kommt nach Verlust wieder (aktuelle Schwierigkeit)
+    persistent   = {
+      groups       = 1,            -- gleichzeitig aktive Dauer-CAP-Gruppen (zählen nicht gegen maxActive)
+      respawnDelay = {300, 600},   -- s nach Verlust bis zum nächsten Start
+      minBlueDist  = 60000,        -- Startplatz mindestens so weit von jeder blauen Basis (m)
+      stuckTimeout = 900,          -- s: nie abgehoben -> entfernen und neu starten
+      patrolLength = 40000,        -- Länge des Racetracks (m)
+    },
     autoChance   = 0.0,            -- z.B. 0.3 = 30 % pro Intervall, 0 = nur per F10
     autoInterval = {900, 1800},
     difficulty   = 3,              -- 1 = nur Fox-2, 2 = frühe Fox-1, 3 = R-27 Fox-1, 4 = Fox-3
@@ -543,6 +654,11 @@ D.samTypes = {
            extra = {"SA-11 Buk CC 9S470M1"}, ln = "SA-11 Buk LN 9A310M1", nLn = 4, r = 160, critical = "ln" },
   SA8  = { name = "SA-8 Gecko", track = {}, search = {}, ln = "Osa 9A33 ln", nLn = 2, r = 250, critical = "ln" },
   SA15 = { name = "SA-15 Gauntlet", track = {}, search = {}, ln = "Tor 9A331", nLn = 2, r = 250, critical = "ln" },
+  -- schwere Flak (sam.aaa): KS-19 100 mm mit zwei, S-60 57 mm mit einem Fire-Can-Feuerleitradar
+  AAA100 = { name = "Heavy AAA KS-19 + 2x Fire Can", track = {"SON_9"}, search = {}, extra = {"SON_9"},
+             ln = "KS-19", nLn = 4, r = 90, critical = "track" },
+  AAA57  = { name = "Heavy AAA S-60 + Fire Can", track = {"SON_9"}, search = {},
+             ln = "S-60_Type59_Artillery", nLn = 6, r = 70, critical = "track" },
   -- nur für die Hauptbasis (nicht im Pool); Typnamen ungetestet. critical = "all": Zielradar UND alle Startgeräte müssen fallen
   SA5  = { name = "SA-5 Gammon (S-200)", track = {"RPC_5N62V"}, search = {"RLS_19J6"},
            ln = "S-200_Launcher", nLn = 4, r = 150, critical = "all" },
@@ -607,13 +723,16 @@ D.bombers       = {}
 D.fortress      = nil
 D.fortressBase  = nil
 D.caps          = {}
+D.capPersist    = {}
+D.capPersistOn  = false
 D.targetPool    = {}
 D.targetsTotal  = 0
 D.capturedCount = 0
 D.counter       = 0
 D.markId        = 7000
 D.started       = false
-D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0, battle = 0 }
+D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0, battle = 0,
+                    scud = 0, csar = 0, escort = 0 }
 D.blueBases     = {}
 D.nextSam       = math.huge
 D.nextCas       = math.huge
@@ -1188,7 +1307,7 @@ end
 
 function D.spawnSam()
   local n = 0
-  for _, st in ipairs(D.sites) do if not st.ao.fortress then n = n + 1 end end   -- Hauptbasis zählt nicht mit
+  for _, st in ipairs(D.sites) do if not st.ao.fortress and not st.ao.ambush then n = n + 1 end end   -- Hauptbasis/Hinterhalte zählen nicht mit
   if n >= D.cfg.sam.maxActive then return false end
   local aos = aoCandidates("samLeft")
   if #aos == 0 then return false end
@@ -1214,9 +1333,99 @@ function D.nextSamKey(ao)
       for k, w in pairs(cfg.pool) do if cls[k] then sub[k] = w end end
       if next(sub) then table.insert(ao.samPlan, math.random(#ao.samPlan + 1), weighted(sub)) end
     end
+    if ao.aaaKey then table.insert(ao.samPlan, math.random(#ao.samPlan + 1), ao.aaaKey) end
   end
   if #ao.samPlan > 0 then return table.remove(ao.samPlan, 1) end
   return weighted(cfg.pool)
+end
+
+-------------------------------------------------------------------------------
+-- SAM-HINTERHALTE im inaktiven Feindgebiet (hinter den aktiven AOs)
+-------------------------------------------------------------------------------
+D.nextAmbush = 0
+
+-- liegt p "hinter" den AOs? (weiter von Blau entfernt als die nächste aktive AO samt Radius + margin)
+function D.ambushSpotOk(p)
+  local c = D.cfg.ambush
+  local b = nearestBlueBase(p)
+  if not b then return false end
+  local dB = dist(p, b)
+  if dB > c.maxBlueDist then return false end
+  local nearest, nd
+  for _, ao in ipairs(D.aos) do
+    local q = { x = ao.x, y = ao.y }
+    local d = dist(p, q)
+    if d < ao.radius + c.margin then return false end
+    if not nd or d < nd then nearest, nd = ao, d end
+  end
+  if nearest then
+    local q = { x = nearest.x, y = nearest.y }
+    local bq = nearestBlueBase(q)
+    if bq and dB < dist(q, bq) + nearest.radius + c.margin then return false end
+  elseif dB < c.margin * 4 then
+    return false
+  end
+  if D.fortress and D.fortress.ao and dist(p, D.fortress.ao) < 30000 then return false end
+  for _, sz in ipairs(D.safeZones or {}) do
+    if dist(p, sz) < sz.r then return false end
+  end
+  return true
+end
+
+function D.spawnAmbush(force)
+  local c = D.cfg.ambush
+  local n = 0
+  for _, st in ipairs(D.sites) do if st.ao.ambush then n = n + 1 end end
+  if n >= c.maxActive then return false end
+  D.refreshBlueBases()
+  -- rote Flugplätze (ohne aktive AOs) als Anker: Hinterhalte liegen im Hinterland, nicht im Niemandsland
+  local anchors = {}
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local okc, desc = pcall(function() return ab:getDesc() end)
+    if okc and desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() == D.cfg.redSide
+       and not D.ignoredBase(ab) then
+      anchors[#anchors + 1] = toV2(ab:getPoint())
+    end
+  end
+  if #anchors == 0 then return false end
+  local players = playerPositions()
+  local avoid = {}
+  for _, st in ipairs(D.sites) do avoid[#avoid + 1] = st.pos end
+  for _ = 1, 60 do
+    local a = anchors[math.random(#anchors)]
+    local p = offset(a, math.random() * 2 * math.pi, randRange(c.baseRadius))
+    p = D.nearRoad(p) or p
+    if okGround(p) and D.ambushSpotOk(p) and farFrom(p, avoid, D.cfg.sam.minSeparation)
+       and farFrom(p, players, D.cfg.minDistPlayers) and (force or D.samSpotClear(p)) then
+      local key = weighted(c.pool)
+      local ao = { name = "Ambush", x = p.x, y = p.y, radius = 8000, samLeft = 1, samActive = 0, ambush = true,
+                   expires = timer.getTime() + randRange(c.lifetime) }
+      D.createSam(ao, key, p, "ambush")
+      env.info(string.format("DynSEAD: ambush %s at %s", key, D.fmtPos(p)))
+      if force then msg(string.format("DEBUG: Ambush %s spawned at %s", D.samTypes[key].name, D.fmtPos(p))) end
+      return true
+    end
+  end
+  if force then msg("DEBUG: No valid ambush position found.") end
+  return false
+end
+
+function D.ambushTick(now, players)
+  local c = D.cfg.ambush
+  if not c.enabled then return end
+  for i = #D.sites, 1, -1 do
+    local s = D.sites[i]
+    if s.ao.ambush and now >= s.ao.expires and farFrom(s.pos, players, c.despawnRange) then
+      destroyGroup(s.group)
+      if s.pdGroup then destroyGroup(s.pdGroup) end
+      table.remove(D.sites, i)
+    end
+  end
+  if D.nextAmbush == 0 then D.nextAmbush = now + randRange(c.interval) end   -- erster Hinterhalt nicht sofort
+  if now >= D.nextAmbush then
+    D.nextAmbush = now + randRange(c.interval)
+    D.spawnAmbush()
+  end
 end
 
 -- Eine SAM-Stellung des Typs key an Position p in der AO ao erzeugen
@@ -1238,7 +1447,7 @@ function D.createSam(ao, key, p, forceMode)
   ao.samActive = ao.samActive + 1
 
   local pd = D.cfg.sam.pointDefense
-  if pd and pd.types[key] and math.random() < pd.chance then
+  if pd and pd.types[key] and not ao.ambush and math.random() < pd.chance then
     local pp = offset(p, math.random() * 2 * math.pi, pd.dist)
     site.pdGroup = gname .. "-PD"
     D.addGround(D.cfg.redCountry, {
@@ -2076,11 +2285,48 @@ function D.currentCapTier()
   return math.max(1, math.min(#c.tiers, t))
 end
 
-function D.spawnCAP(tier)
+-- nächster Spieler in der Luft (Flugzeug/Hubschrauber) zu Punkt p
+local function nearestAirPlayer(p)
+  local best, bestD
+  for _, u in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+    if u and u:isExist() and u:inAir() then
+      local q = toV2(u:getPoint())
+      local d = dist(p, q)
+      if not bestD or d < bestD then best, bestD = q, d end
+    end
+  end
+  return best
+end
+
+-- Jagd-CAP: Route direkt zum nächsten Spieler in der Luft, Luftziele ohne Entfernungsgrenze bekämpfen
+function D.capHuntRoute(c)
+  local g = Group.getByName(c.group)
+  if not g or not g:isExist() then return end
+  local u = g:getUnit(1)
+  if not u or not u:isExist() then return end
+  local p = toV2(u:getPoint())
+  local tgt = nearestAirPlayer(p)
+  local cfg = D.cfg.cap
+  local tasks = { { number = 1, enabled = true, auto = false, id = "EngageTargets",
+                    params = { targetTypes = { "Air" }, priority = 0 } } }
+  local pts
+  if tgt then
+    pts = { airWP(p, cfg.alt, cfg.speed, tasks), airWP(tgt, cfg.alt, cfg.speed * 1.2, {}) }
+  else
+    tasks[2] = { number = 2, enabled = true, auto = false, id = "Orbit",
+                 params = { pattern = "Circle", point = p, speed = cfg.speed, altitude = cfg.alt } }
+    pts = { airWP(p, cfg.alt, cfg.speed, tasks) }
+  end
+  g:getController():setTask({ id = "Mission", params = { route = { points = pts } } })
+end
+
+-- mode: "patrol" (Racetrack in einer AO, bekämpft Luftziele bis 80 km) oder "hunt" (sucht den nächsten Spieler)
+function D.spawnCAP(tier, mode)
   local cfg = D.cfg.cap
   if not cfg.enabled then return end
+  mode = mode or "patrol"
   if #D.caps >= cfg.maxActive then
-    msg(D.cfg.awacs.callsignName .. ": Enemy CAP already airborne.")
+    msg(string.format("%s: Already %d enemy CAP groups airborne (maximum).", D.cfg.awacs.callsignName, #D.caps))
     return
   end
   local aos = aoCandidates(nil)
@@ -2148,12 +2394,852 @@ function D.spawnCAP(tier)
     end
   end, "CAP check"), nil, timer.getTime() + 5)
 
-  D.caps[#D.caps + 1] = { group = gname }
+  local c = { group = gname, hunt = (mode == "hunt"), nextHunt = timer.getTime() + 2 }
+  D.caps[#D.caps + 1] = c
   D.say({ "new_picture", tBE(best), tNum(cfg.size), "contacts", tAircraft(v.type),
           "angels", tNum(math.floor(cfg.alt * 3.28084 / 1000 + 0.5)), "hostile" })
-  msg(string.format("%s [%s]: New hostile group – %dx %s, %s, angels %d, approx. %s",
+  msg(string.format("%s [%s]: New hostile group – %dx %s, %s, angels %d, approx. %s – %s (%d/%d airborne)",
     D.cfg.awacs.callsignName, bestZone.name, cfg.size, v.type, td.label,
-    math.floor(cfg.alt * 3.28084 / 1000 + 0.5), bullseyeStr(best)))
+    math.floor(cfg.alt * 3.28084 / 1000 + 0.5), bullseyeStr(best),
+    c.hunt and "hunting the nearest aircraft" or "patrolling the AO", #D.caps, cfg.maxActive))
+end
+
+function D.removeCAPs()
+  local n = #D.caps + #D.capPersist
+  if n == 0 then msg(D.cfg.awacs.callsignName .. ": No enemy CAP airborne.") return end
+  for _, c in ipairs(D.caps) do destroyGroup(c.group) end
+  for _, c in ipairs(D.capPersist) do destroyGroup(c.group) end
+  D.caps, D.capPersist = {}, {}
+  msg(string.format("%s: %d enemy CAP group(s) removed.%s", D.cfg.awacs.callsignName, n,
+    D.capPersistOn and " Respawning CAP is still ON." or ""))
+end
+
+-- Dauer-CAP: Startplatz = feindlicher Flugplatz (weit genug von blauen Basen), der einer aktiven AO am nächsten ist
+function D.spawnPersistentCAP()
+  local cfg, pc = D.cfg.cap, D.cfg.cap.persistent
+  D.refreshBlueBases()
+  local aos = aoCandidates(nil)
+  local function nearestAO(p)
+    local b, bd
+    for _, ao in ipairs(aos) do
+      local d = dist(p, { x = ao.x, y = ao.y })
+      if not bd or d < bd then b, bd = ao, d end
+    end
+    return b, bd
+  end
+  local base, baseD
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local okc, desc = pcall(function() return ab:getDesc() end)
+    if okc and desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() == D.cfg.redSide
+       and not D.ignoredBase(ab) then
+      local p = toV2(ab:getPoint())
+      if farFrom(p, D.blueBases, pc.minBlueDist) then
+        local _, d = nearestAO(p)
+        if not d then local b = nearestBlueBase(p); d = b and dist(p, b) or 0 end
+        if not baseD or d < baseD then base, baseD = { ab = ab, p = p }, d end
+      end
+    end
+  end
+  if not base and #aos == 0 then return false end
+
+  -- Patrouillengebiet: nächste aktive AO, sonst Richtung nächste blaue Basis
+  local from = base and base.p or { x = aos[1].x, y = aos[1].y }
+  local ao = nearestAO(from)
+  local center
+  if ao then
+    center = { x = ao.x, y = ao.y }
+  else
+    local b = nearestBlueBase(from)
+    center = b and { x = from.x + 0.4 * (b.x - from.x), y = from.y + 0.4 * (b.y - from.y) } or from
+  end
+  local hdg = math.atan2(center.y - from.y, center.x - from.x)
+  local p1 = offset(center, hdg + math.pi / 2, pc.patrolLength / 2)
+  local p2 = offset(center, hdg - math.pi / 2, pc.patrolLength / 2)
+
+  local td = cfg.tiers[D.currentCapTier()]
+  local v = td.variants[math.random(#td.variants)]
+  local lo = D.capLoadouts[v.loadout]
+  local tasks = {
+    { number = 1, enabled = true, auto = false, id = "EngageTargets",
+      params = { targetTypes = { "Air" }, priority = 0, maxDistEnabled = true, maxDist = 80000 } },
+    { number = 2, enabled = true, auto = false, id = "Orbit",
+      params = { pattern = "Race-Track", point = p1, point2 = p2, speed = cfg.speed, altitude = cfg.alt } },
+  }
+  local function build(ground)
+    local gname = nextId("RCAP")
+    local start = ground and base.p or offset(center, hdg + math.pi, 30000)
+    local units = {}
+    for i = 1, cfg.size do
+      units[i] = {
+        name = gname .. "-" .. i, type = v.type,
+        x = start.x - 30 * (i - 1), y = start.y + 30 * (i - 1),
+        alt = ground and land.getHeight(start) or cfg.alt, alt_type = "BARO",
+        speed = ground and 0 or cfg.speed, heading = hdg, skill = td.skill or D.cfg.skill,
+        payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil,
+      }
+    end
+    local first
+    if ground then
+      first = { x = start.x, y = start.y, alt = land.getHeight(start), alt_type = "BARO", type = "TakeOff",
+        action = "From Runway", airdromeId = base.ab:getID(), speed = 0, speed_locked = true,
+        ETA = 0, ETA_locked = false, task = { id = "ComboTask", params = { tasks = {} } } }
+    else
+      first = airWP(start, cfg.alt, cfg.speed, {})
+    end
+    coalition.addGroup(D.cfg.redCountry, Group.Category.AIRPLANE, {
+      name = gname, task = "CAP", uncontrolled = false, units = units,
+      route = { points = { first, airWP(p1, cfg.alt, cfg.speed, tasks), airWP(p2, cfg.alt, cfg.speed, {}) } },
+    })
+    local g = Group.getByName(gname)
+    return (g and g:isExist()) and gname or nil
+  end
+  local ground = base ~= nil
+  local gname = ground and build(true)
+  if not gname then ground = false; gname = build(false) end
+  if not gname then return false end
+  D.capPersist[#D.capPersist + 1] = { group = gname, spawned = timer.getTime() }
+  msg(string.format("%s: Respawning enemy CAP – %dx %s, %s, %s, patrolling %s.",
+    D.cfg.awacs.callsignName, cfg.size, v.type, td.label,
+    ground and ("taking off from " .. base.ab:getName()) or ("airborne near " .. bullseyeStr(center)),
+    ao and ("near " .. ao.name) or bullseyeStr(center)))
+  return true
+end
+
+function D.capPersistTick(now)
+  local pc = D.cfg.cap.persistent
+  local alive = 0
+  for i = #D.capPersist, 1, -1 do
+    local c = D.capPersist[i]
+    local n = groupAliveCount(c.group)
+    local airborne = false
+    if n > 0 then
+      for _, u in ipairs(Group.getByName(c.group):getUnits()) do
+        if u:isExist() and u:inAir() then airborne = true end
+      end
+    end
+    if airborne then c.wasAirborne = true end
+    -- gelandet (z. B. RTB ohne Sprit) oder nie abgehoben: entfernen und neu starten
+    local stale = n > 0 and not airborne and (c.wasAirborne or now - c.spawned > pc.stuckTimeout)
+    if n == 0 or stale then
+      if stale then
+        destroyGroup(c.group)
+      else
+        D.stats.cap = D.stats.cap + 1
+        msg(D.cfg.awacs.callsignName .. ": Respawning hostile CAP destroyed.")
+      end
+      table.remove(D.capPersist, i)
+      D.capPersistNext = now + randRange(pc.respawnDelay)
+    else
+      alive = alive + 1
+    end
+  end
+  if D.capPersistOn and alive < pc.groups and now >= (D.capPersistNext or 0) then
+    D.capPersistNext = now + 60
+    D.spawnPersistentCAP()
+  end
+end
+
+function D.toggleCapPersist()
+  local pc = D.cfg.cap.persistent
+  D.capPersistOn = not D.capPersistOn
+  if D.capPersistOn then
+    D.capPersistNext = 0
+    msg(string.format("%s: Respawning enemy CAP ON – %d group(s) at current difficulty, launching from the enemy airfield nearest to an active AO, back %d-%d min after each loss.",
+      D.cfg.awacs.callsignName, pc.groups, math.floor(pc.respawnDelay[1] / 60), math.floor(pc.respawnDelay[2] / 60)))
+  else
+    msg(D.cfg.awacs.callsignName .. ": Respawning enemy CAP OFF – groups still airborne stay until destroyed (or use Remove all).")
+  end
+end
+
+-------------------------------------------------------------------------------
+-- CHAOS IM FEINDGEBIET: kleine Gefechte, feindliche Hubschrauber
+-------------------------------------------------------------------------------
+D.skirmishes, D.helos = {}, {}
+D.nextSkirmish, D.nextHelo = 0, 0
+D.heloOn = D.cfg.chaos.helos.startOn ~= false
+
+-- rote Flugplätze (Anker für Feindgebiet), optional mit Mindestabstand zu blauen Basen
+local function redAirbases(minBlue)
+  local out = {}
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local okc, desc = pcall(function() return ab:getDesc() end)
+    if okc and desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() == D.cfg.redSide
+       and not D.ignoredBase(ab) then
+      local p = toV2(ab:getPoint())
+      if farFrom(p, D.blueBases, minBlue or 0) then out[#out + 1] = { ab = ab, p = p } end
+    end
+  end
+  return out
+end
+
+-- Punkt im Feindgebiet: nächster Flugplatz ist rot, weit genug von blauen Basen
+local function enemyGround(p, minBlue)
+  if not okGround(p) or not farFrom(p, D.blueBases, minBlue) then return false end
+  local best, bd
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    if not D.ignoredBase(ab) then
+      local d = dist(p, toV2(ab:getPoint()))
+      if not bd or d < bd then best, bd = ab, d end
+    end
+  end
+  return best ~= nil and best:getCoalition() == D.cfg.redSide
+end
+
+local function groundGroup(country, gname, types, n, c, hdg, spacing, hidden)
+  local units = {}
+  for i = 1, n do
+    local o = offset(c, hdg + math.pi / 2, (i - (n + 1) / 2) * spacing)
+    units[i] = { name = gname .. "-" .. i, type = types[math.random(#types)], x = o.x, y = o.y,
+                 heading = hdg, skill = D.cfg.skill, playerCanDrive = false }
+  end
+  D.addGround(country, { name = gname, task = "Ground Nothing", hidden = hidden, units = units })
+  return units
+end
+
+local function moveTo(gname, to, speed, onRoad)
+  local g = Group.getByName(gname)
+  local p = groupPos(gname)
+  if not g or not g:isExist() or not p then return end
+  local act = onRoad and "On Road" or "Off Road"
+  g:getController():setTask({ id = "Mission", params = { route = { points = {
+    { x = p.x, y = p.y, type = "Turning Point", action = act, speed = speed, speed_locked = true,
+      ETA = 0, ETA_locked = false, task = emptyTask() },
+    { x = to.x, y = to.y, type = "Turning Point", action = act, speed = speed, speed_locked = true,
+      ETA = 0, ETA_locked = false, task = emptyTask() } } } } })
+end
+
+-- Kleines Gefecht im Hinterland hinter den aktiven AOs (nie in einer AO, bei blauen Basen oder auf dem Weg dorthin)
+function D.spawnSkirmish()
+  local c = D.cfg.chaos.skirmish
+  local anchors = redAirbases(c.minBlueDist)
+  if #anchors == 0 then return false end
+  local players = playerPositions()
+  for _ = 1, 40 do
+    local a = anchors[math.random(#anchors)]
+    local p = offset(a.p, math.random() * 2 * math.pi, randRange({5000, 40000}))
+    local others = {}
+    for _, sk in ipairs(D.skirmishes) do others[#others + 1] = sk.pos end
+    -- wie die SAM-Hinterhalte nur hinter den aktiven AOs, nie auf dem Weg dorthin
+    if D.ambushSpotOk(p) and enemyGround(p, c.minBlueDist) and farFrom(p, players, 10000) and farFrom(p, others, 20000)
+       and farFrom(p, D.safeZones or {}, 15000) then
+      local hdg = math.random() * 2 * math.pi
+      local half = randRange(c.gap) / 2
+      local bp, rp = offset(p, hdg, -half), offset(p, hdg, half)
+      if okGround(bp) and okGround(rp) then
+        local n = math.random(c.size[1], c.size[2])
+        local bname, rname = nextId("SKB"), nextId("SKR")
+        groundGroup(D.cfg.blueCountry, bname, c.blue, n, bp, hdg, 45, false)
+        groundGroup(D.cfg.redCountry, rname, c.red, n, rp, hdg + math.pi, 45, D.hideOnMap())
+        -- beide Seiten rücken langsam auf die Mitte vor
+        timer.scheduleFunction(safe(function()
+          moveTo(bname, offset(p, hdg, 300), 4, false)
+          moveTo(rname, offset(p, hdg, -300), 4, false)
+        end, "Skirmish"), nil, timer.getTime() + 2)
+        D.skirmishes[#D.skirmishes + 1] = { pos = p, blue = bname, red = rname,
+          expires = timer.getTime() + randRange(c.lifetime) }
+        env.info(string.format("DynSEAD: skirmish %dv%d at %s", n, n, D.fmtPos(p)))
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- Feindlicher Hubschrauber (unbewaffnet): Luftstart über einem roten Flugplatz, Landung auf einem anderen
+function D.spawnHelo()
+  local c = D.cfg.chaos.helos
+  local bases = redAirbases(c.minBlueDist)
+  if #bases < 2 then return false end
+  for _ = 1, 30 do
+    local a, b = bases[math.random(#bases)], bases[math.random(#bases)]
+    local d = dist(a.p, b.p)
+    if a ~= b and d >= c.dist[1] and d <= c.dist[2] then
+      local gname = nextId("HELO")
+      local typ = c.types[math.random(#c.types)]
+      local hdg = math.atan2(b.p.y - a.p.y, b.p.x - a.p.x)
+      local start = offset(a.p, hdg, 1500)
+      local units = {}
+      for i = 1, math.random(c.size[1], c.size[2]) do
+        units[i] = { name = gname .. "-" .. i, type = typ, x = start.x - 60 * (i - 1), y = start.y - 60 * (i - 1),
+                     alt = c.alt, alt_type = "RADIO", speed = c.speed, heading = hdg, skill = D.cfg.skill,
+                     payload = { pylons = {}, fuel = 1929, flare = 0, chaff = 0, gun = 0 } }
+      end
+      local wp1 = airWP(start, c.alt, c.speed, {})
+      wp1.alt_type = "RADIO"
+      local lwp = { x = b.p.x, y = b.p.y, alt = c.alt, alt_type = "RADIO", type = "Land", action = "Landing",
+                     airdromeId = b.ab:getID(), speed = c.speed, speed_locked = true, ETA = 0, ETA_locked = false,
+                     task = emptyTask() }
+      coalition.addGroup(D.cfg.redCountry, Group.Category.HELICOPTER, {
+        name = gname, task = "Transport", uncontrolled = false, units = units,
+        route = { points = { wp1, lwp } } })
+      local g = Group.getByName(gname)
+      if g and g:isExist() then
+        local air = AI.Option.Air
+        if air and air.id and air.id.ROE then
+          pcall(function() g:getController():setOption(air.id.ROE, air.val.ROE.WEAPON_HOLD) end)
+        end
+        D.helos[#D.helos + 1] = { group = gname, spawned = timer.getTime() }
+        env.info(string.format("DynSEAD: helo %s %s -> %s", typ, a.ab:getName(), b.ab:getName()))
+        return true
+      end
+    end
+  end
+  return false
+end
+
+function D.toggleHelos()
+  D.heloOn = not D.heloOn
+  if D.heloOn then
+    D.nextHelo = 0
+    msg(D.cfg.awacs.callsignName .. ": Enemy helicopter traffic ON.")
+  else
+    for _, h in ipairs(D.helos) do destroyGroup(h.group) end
+    D.helos = {}
+    msg(D.cfg.awacs.callsignName .. ": Enemy helicopter traffic OFF – airspace clear of enemy helicopters.")
+  end
+end
+
+function D.chaosTick(now, players)
+  local cc = D.cfg.chaos
+  D.refreshBlueBases()
+  -- Gefechte: Ende, wenn eine Seite vernichtet ist (Rest nach 5 min weg) oder Lebensdauer ohne Spieler in der Nähe
+  for i = #D.skirmishes, 1, -1 do
+    local sk = D.skirmishes[i]
+    local nb, nr = groupAliveCount(sk.blue), groupAliveCount(sk.red)
+    if (nb == 0 or nr == 0) and not sk.over then sk.over = now + 300 end
+    if (sk.over and now >= sk.over) or (now >= sk.expires and farFrom(sk.pos, players, 20000)) then
+      destroyGroup(sk.blue); destroyGroup(sk.red)
+      table.remove(D.skirmishes, i)
+    end
+  end
+  if cc.skirmish.enabled and #D.skirmishes < cc.skirmish.maxActive and now >= D.nextSkirmish then
+    D.nextSkirmish = now + randRange(cc.skirmish.interval)
+    D.spawnSkirmish()
+  end
+  -- Hubschrauber: abgeschossen, gelandet oder Zeitüberschreitung
+  for i = #D.helos, 1, -1 do
+    local h = D.helos[i]
+    local n = groupAliveCount(h.group)
+    local airborne = false
+    if n > 0 then
+      for _, u in ipairs(Group.getByName(h.group):getUnits()) do if u:isExist() and u:inAir() then airborne = true end end
+    end
+    if airborne then h.wasAirborne = true end
+    if n == 0 or (h.wasAirborne and not airborne) or now - h.spawned > cc.helos.timeout then
+      if n > 0 then destroyGroup(h.group) end
+      table.remove(D.helos, i)
+      D.nextHelo = math.max(D.nextHelo, now + randRange(cc.helos.interval))
+    end
+  end
+  if cc.helos.enabled and D.heloOn and #D.helos < cc.helos.maxActive and now >= D.nextHelo then
+    D.nextHelo = now + randRange(cc.helos.interval)
+    D.spawnHelo()
+  end
+end
+
+-------------------------------------------------------------------------------
+-- ESKORTE: verbündete C-130
+-------------------------------------------------------------------------------
+D.escort, D.nextEscort = nil, 0
+
+local function blueJets()
+  local out = {}
+  for _, u in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+    local ok, cat = pcall(function() return u:getDesc().category end)
+    if ok and cat == Unit.Category.AIRPLANE and u:isExist() and u:inAir() then out[#out + 1] = toV2(u:getPoint()) end
+  end
+  return out
+end
+
+-- Ziel = eigener Platz, der einer aktiven AO am nächsten ist; Start = am weitesten entfernter eigener Platz
+function D.requestEscort()
+  local c = D.cfg.escort
+  if D.escort then msg("ESCORT: A C-130 escort mission is already running.") return false end
+  D.refreshBlueBases()
+  if #D.blueBases == 0 then return false end
+  local aos = aoCandidates(nil)
+  local function frontDist(b)
+    local d = math.huge
+    for _, ao in ipairs(aos) do d = math.min(d, dist(b, { x = ao.x, y = ao.y })) end
+    return d
+  end
+  local dest, origin
+  for _, b in ipairs(D.blueBases) do
+    if not dest or frontDist(b) < frontDist(dest) then dest = b end
+  end
+  for _, b in ipairs(D.blueBases) do
+    if b ~= dest and dist(b, dest) >= c.minRoute and (not origin or dist(b, dest) > dist(origin, dest)) then origin = b end
+  end
+  local destAb
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    if ab:getName() == dest.name then destAb = ab end
+  end
+  if not destAb then return false end
+  -- Treffpunkt/Start: über dem Startplatz oder, wenn keiner weit genug weg ist, hinter dem Ziel (weg von der Front)
+  local start
+  if origin then
+    start = { x = origin.x, y = origin.y }
+  else
+    local away = math.random() * 2 * math.pi
+    if #aos > 0 then
+      local ao = aos[1]
+      for _, a in ipairs(aos) do if dist(dest, { x = a.x, y = a.y }) < dist(dest, { x = ao.x, y = ao.y }) then ao = a end end
+      away = math.atan2(dest.y - ao.y, dest.x - ao.x)
+    end
+    start = offset(dest, away, c.minRoute)
+  end
+  local gname = nextId("ESC")
+  local hdg = math.atan2(dest.y - start.y, dest.x - start.x)
+  local callsign = "Kingfish " .. math.random(1, 9) .. "-1"
+  coalition.addGroup(D.cfg.blueCountry, Group.Category.AIRPLANE, {
+    name = gname, task = "Transport", uncontrolled = false,
+    units = { { name = gname .. "-1", type = c.type, x = start.x, y = start.y, alt = c.alt, alt_type = "BARO",
+                speed = c.speed, heading = hdg, skill = "High", payload = { pylons = {}, fuel = 20830, flare = 60, chaff = 120, gun = 100 } } },
+    route = { points = { airWP(start, c.alt, c.speed, { { number = 1, enabled = true, auto = false, id = "Orbit",
+      params = { pattern = "Circle", point = start, speed = c.speed, altitude = c.alt } } }) } },
+  })
+  local g = Group.getByName(gname)
+  if not g or not g:isExist() then
+    reportError("Escort", "C-130 could not be spawned – check cfg.escort.type")
+    return false
+  end
+  local total = dist(start, dest)
+  local mark = newMarkId()
+  trigger.action.lineToAll(D.cfg.blueSide, mark, toV3(start), toV3(dest), {0.2, 0.6, 1, 0.9}, 2, true, "C-130 route")
+  D.escort = { group = gname, unit = gname .. "-1", callsign = callsign, start = start, dest = dest, destAb = destAb,
+               total = total, state = "hold", holdUntil = timer.getTime() + c.holdTime, wave = 1, mark = mark, interceptors = {} }
+  msg(string.format("ESCORT: %s (C-130) is holding at %s, angels %d, waiting for escort (up to %d min).\n"
+    .. "Destination: %s, %d NM. Expect enemy interceptors en route – keep the Hercules alive!",
+    callsign, bullseyeStr(start), math.floor(c.alt * 3.28084 / 1000 + 0.5), math.floor(c.holdTime / 60),
+    dest.name or "front airfield", math.floor(total / 1852 + 0.5)))
+  return true
+end
+
+local function escortDepart(es)
+  local c = D.cfg.escort
+  local g = Group.getByName(es.group)
+  if not g or not g:isExist() then return end
+  local p = groupPos(es.group) or es.start
+  local lwp = { x = es.dest.x, y = es.dest.y, alt = 0, alt_type = "RADIO", type = "Land", action = "Landing",
+                airdromeId = es.destAb:getID(), speed = 80, speed_locked = true, ETA = 0, ETA_locked = false,
+                task = { id = "ComboTask", params = { tasks = {} } } }
+  g:getController():setTask({ id = "Mission", params = { route = { points = { airWP(p, c.alt, c.speed, {}), lwp } } } })
+end
+
+-- Abfangjäger: kommen aus Richtung Feindgebiet und jagen die C-130 (Route alle huntUpdate s neu)
+local function escortIntercept(es, cp)
+  local c, cap = D.cfg.escort, D.cfg.cap
+  local enemy
+  for _, a in ipairs(redAirbases(0)) do
+    if not enemy or dist(a.p, cp) < dist(enemy, cp) then enemy = a.p end
+  end
+  local dir = enemy and math.atan2(enemy.y - cp.y, enemy.x - cp.x) or math.random() * 2 * math.pi
+  local sp = offset(cp, dir, c.interceptDist)
+  local td = cap.tiers[D.currentCapTier()]
+  local v = td.variants[math.random(#td.variants)]
+  local lo = D.capLoadouts[v.loadout]
+  local gname = nextId("INT")
+  local units = {}
+  for i = 1, cap.size do
+    units[i] = { name = gname .. "-" .. i, type = v.type, x = sp.x - 300 * (i - 1), y = sp.y + 300 * (i - 1),
+      alt = cap.alt, alt_type = "BARO", speed = cap.speed, heading = dir + math.pi, skill = td.skill or D.cfg.skill,
+      payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil }
+  end
+  local tasks = { { number = 1, enabled = true, auto = false, id = "EngageTargets",
+                    params = { targetTypes = { "Air" }, priority = 0 } } }
+  coalition.addGroup(D.cfg.redCountry, Group.Category.AIRPLANE, {
+    name = gname, task = "CAP", uncontrolled = false, units = units,
+    route = { points = { airWP(sp, cap.alt, cap.speed, tasks), airWP(cp, cap.alt, cap.speed * 1.2, {}) } },
+  })
+  es.interceptors[#es.interceptors + 1] = gname
+  msg(string.format("%s: Hostile interceptors – %dx %s – launched toward %s from %s, %s!",
+    D.cfg.awacs.callsignName, cap.size, v.type, es.callsign,
+    string.format("%03d°", math.floor((math.deg(math.atan2(sp.y - cp.y, sp.x - cp.x)) + 360) % 360 + 0.5)),
+    string.format("%d NM", math.floor(c.interceptDist / 1852 + 0.5))))
+end
+
+function D.reportEscort()
+  local es = D.escort
+  if not es then msg("ESCORT: No C-130 escort mission running.") return end
+  local p = groupPos(es.group)
+  if not p then msg("ESCORT: Contact lost.") return end
+  local left = dist(p, es.dest)
+  local hostile = 0
+  for _, n in ipairs(es.interceptors) do if groupAliveCount(n) > 0 then hostile = hostile + 1 end end
+  msg(string.format("ESCORT: %s at %s, %s. %d NM to %s. Hostile interceptor groups: %d.",
+    es.callsign, bullseyeStr(p), es.state == "hold" and "holding for escort" or "en route",
+    math.floor(left / 1852 + 0.5), es.dest.name or "destination", hostile))
+end
+
+local function endEscort(es, now)
+  trigger.action.removeMark(es.mark)
+  local g, ints = es.group, es.interceptors
+  timer.scheduleFunction(function()
+    destroyGroup(g)
+    for _, n in ipairs(ints) do destroyGroup(n) end
+  end, nil, now + 600)
+  D.escort = nil
+  local c = D.cfg.escort
+  if c.autoInterval and c.autoInterval[1] and c.autoInterval[1] > 0 then D.nextEscort = now + randRange(c.autoInterval) end
+end
+
+function D.escortTick(now)
+  local c = D.cfg.escort
+  local es = D.escort
+  if not es then
+    if c.autoInterval and c.autoInterval[1] and c.autoInterval[1] > 0 then
+      if D.nextEscort == 0 then D.nextEscort = now + randRange(c.autoInterval) end
+      if now >= D.nextEscort then
+        D.nextEscort = now + 600
+        if #aoCandidates(nil) > 0 then D.requestEscort() end
+      end
+    end
+    return
+  end
+  local u = Unit.getByName(es.unit)
+  if not u or not u:isExist() or u:getLife() < 1 then
+    msg(string.format("ESCORT: %s has been shot down – mission failed.", es.callsign))
+    endEscort(es, now)
+    return
+  end
+  local p = toV2(u:getPoint())
+  if es.state == "hold" then
+    if now >= es.holdUntil or not farFrom(p, blueJets(), c.joinDist) then
+      es.state = "enroute"
+      escortDepart(es)
+      msg(string.format("ESCORT: %s %s – departing for %s.", es.callsign,
+        now >= es.holdUntil and "could not wait any longer" or "has its escort", es.dest.name or "destination"))
+    end
+  elseif es.state == "enroute" then
+    if u:inAir() then es.wasAirborne = true end
+    local progress = 1 - dist(p, es.dest) / es.total
+    local w = c.waves[es.wave]
+    if w and progress >= w and (es.wave == 1 or es.total >= c.longRoute) then
+      escortIntercept(es, p)
+      es.wave = es.wave + 1
+    end
+    if now >= (es.nextHunt or 0) then
+      es.nextHunt = now + c.huntUpdate
+      for _, n in ipairs(es.interceptors) do
+        local g = Group.getByName(n)
+        local ip = groupPos(n)
+        if g and g:isExist() and ip then
+          g:getController():setTask({ id = "Mission", params = { route = { points = {
+            airWP(ip, D.cfg.cap.alt, D.cfg.cap.speed, { { number = 1, enabled = true, auto = false, id = "EngageTargets",
+              params = { targetTypes = { "Air" }, priority = 0 } } }),
+            airWP(p, D.cfg.cap.alt, D.cfg.cap.speed * 1.2, {}) } } } })
+        end
+      end
+    end
+    if es.wasAirborne and not u:inAir() and dist(p, es.dest) < 5000 then
+      D.stats.escort = D.stats.escort + 1
+      msg(string.format("ESCORT: %s has landed at %s – cargo delivered, good escort! (%d total)",
+        es.callsign, es.dest.name or "destination", D.stats.escort))
+      endEscort(es, now)
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
+-- SCUD-JAGD
+-------------------------------------------------------------------------------
+D.scud, D.nextScud = nil, 0
+
+local function clearMark(id) if id then trigger.action.removeMark(id) end end
+
+function D.spawnScud(force)
+  local c = D.cfg.scud
+  D.refreshBlueBases()
+  local anchors = redAirbases(c.minBlueDist)
+  if #anchors == 0 or #D.blueBases == 0 then return false end
+  for _ = 1, 80 do
+    local a = anchors[math.random(#anchors)]
+    local p = offset(a.p, math.random() * 2 * math.pi, randRange({5000, 30000}))
+    p = D.nearRoad(p) or p
+    local tgt = nearestBlueBase(p)
+    local d = tgt and dist(p, tgt)
+    if d and d >= c.range[1] and d <= c.range[2] and okGround(p) and D.ambushSpotOk(p) then
+      local gname = nextId("SCUD")
+      local hdg = math.atan2(tgt.y - p.y, tgt.x - p.x)
+      local units = { { name = gname .. "-1", type = "Scud_B", x = p.x, y = p.y, heading = hdg,
+                        skill = D.cfg.skill, playerCanDrive = false } }
+      for i, t in ipairs(c.escort) do
+        local o = offset(p, hdg + math.pi + (i - 1) * 0.6, 60)
+        units[#units + 1] = { name = gname .. "-" .. (i + 1), type = t, x = o.x, y = o.y, heading = hdg,
+                              skill = D.cfg.skill, playerCanDrive = false }
+      end
+      D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
+      local center = offset(p, math.random() * 2 * math.pi, math.random() * c.areaRadius * 0.7)
+      local mark = newMarkId()
+      trigger.action.circleToAll(D.cfg.blueSide, mark, toV3(center), c.areaRadius,
+        {1, 0.5, 0, 0.9}, {1, 0.5, 0, 0.06}, 2, true, "SCUD launch area")
+      local now = timer.getTime()
+      D.scud = { group = gname, pos = p, target = tgt, center = center, mark = mark,
+                 fireAt = now + randRange(c.setupTime), state = "setup" }
+      msg(string.format("%s: SCUD ALERT – intelligence reports a Scud launcher setting up within %d NM of %s (orange circle on the map). "
+        .. "Expected target: %s. Launch expected in about %d min – find and destroy it!",
+        D.cfg.awacs.callsignName, math.floor(c.areaRadius / 1852 + 0.5), bullseyeStr(center), tgt.name or "a friendly airfield",
+        math.floor((D.scud.fireAt - now) / 60 + 0.5)))
+      env.info("DynSEAD: Scud at " .. D.fmtPos(p))
+      if force then msg("DEBUG: Scud at " .. D.fmtPos(p)) end
+      return true
+    end
+  end
+  if force then msg("DEBUG: No valid Scud position found.") end
+  return false
+end
+
+function D.reportScud()
+  local sc = D.scud
+  if not sc or sc.state == "done" then msg("SCUD: No Scud activity reported.") return end
+  local left = math.max(0, math.floor((sc.fireAt - timer.getTime()) / 60 + 0.5))
+  msg(string.format("SCUD: Launcher within %d NM of %s, target %s. %s",
+    math.floor(D.cfg.scud.areaRadius / 1852 + 0.5), bullseyeStr(sc.center), sc.target.name or "friendly airfield",
+    sc.state == "setup" and string.format("Launch expected in about %d min.", left)
+      or (sc.state == "firing" and "Launcher erecting – launch imminent!" or "Missile launched.")))
+end
+
+function D.scudOnShot(e)
+  local sc = D.scud
+  if not sc or (sc.state ~= "firing" and sc.state ~= "setup") then return end
+  local ok, gname = pcall(function() return e.initiator:getGroup():getName() end)
+  if not ok or gname ~= sc.group then return end
+  sc.state, sc.launchedAt = "launched", timer.getTime()
+  local t = dist(sc.pos, sc.target) / 1100
+  msg(string.format("%s: SCUD LAUNCH! Missile inbound to %s – impact in about %d min. Take cover!",
+    D.cfg.awacs.callsignName, sc.target.name or "a friendly airfield", math.max(1, math.floor(t / 60 + 0.5))))
+end
+
+function D.scudTick(now)
+  local c = D.cfg.scud
+  local sc = D.scud
+  if not sc then
+    if now >= D.nextScud then
+      if D.nextScud == 0 then D.nextScud = now + randRange(c.interval) return end
+      D.nextScud = now + 300
+      D.spawnScud()
+    end
+    return
+  end
+  local alive = unitAlive(sc.group .. "-1")
+  if (sc.state == "setup" or sc.state == "firing") and not alive then
+    D.stats.scud = D.stats.scud + 1
+    msg(string.format("%s: Scud launcher destroyed – launch prevented! Good work. (%d total)", D.cfg.awacs.callsignName, D.stats.scud))
+    sc.state, sc.endAt = "done", now + 300
+  elseif sc.state == "setup" then
+    if not sc.warned and now >= sc.fireAt - 300 then
+      sc.warned = true
+      msg(D.cfg.awacs.callsignName .. ": Scud launch expected within 5 minutes!")
+    end
+    if now >= sc.fireAt then
+      local g = Group.getByName(sc.group)
+      if g and g:isExist() then
+        local ctl = g:getController()
+        pcall(function() ctl:setOption(AI.Option.Ground.id.ALARM_STATE, AI.Option.Ground.val.ALARM_STATE.RED) end)
+        ctl:setTask({ id = "FireAtPoint", params = { point = { x = sc.target.x, y = sc.target.y },
+          radius = c.impactRadius, expendQty = c.salvo, expendQtyEnabled = true } })
+      end
+      sc.state, sc.firedAt = "firing", now
+      msg(D.cfg.awacs.callsignName .. ": Scud launcher is erecting – launch imminent!")
+    end
+  elseif sc.state == "firing" and now - sc.firedAt > c.fireTimeout then
+    -- kein Abschuss-Ereignis: Einschlag nachstellen
+    local t = dist(sc.pos, sc.target) / 1100
+    msg(string.format("%s: SCUD LAUNCH! Missile inbound to %s – impact in about %d min. Take cover!",
+      D.cfg.awacs.callsignName, sc.target.name or "a friendly airfield", math.max(1, math.floor(t / 60 + 0.5))))
+    local tp = toV3(offset(sc.target, math.random() * 2 * math.pi, math.random() * c.impactRadius))
+    timer.scheduleFunction(function() trigger.action.explosion(tp, c.fallbackPower) end, nil, now + t)
+    env.info("DynSEAD: Scud fired no weapon – impact simulated")
+    sc.state, sc.launchedAt = "launched", now
+  elseif sc.state == "launched" then
+    sc.state, sc.endAt = "done", now + 600
+  elseif sc.state == "done" and now >= sc.endAt then
+    destroyGroup(sc.group)
+    clearMark(sc.mark)
+    D.scud = nil
+    D.nextScud = now + randRange(c.interval)
+  end
+end
+
+-------------------------------------------------------------------------------
+-- CSAR
+-------------------------------------------------------------------------------
+D.csars, D.nextCsar = {}, 0
+
+-- Pilot am Boden bei p (name = Rufname für die Meldungen)
+function D.spawnCsar(p, name, force)
+  local c = D.cfg.csar
+  if #D.csars >= c.maxActive and not force then return false end
+  if not okGround(p) then return false end
+  local gname = nextId("CSAR")
+  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = {
+    { name = gname .. "-1", type = "Soldier M4", x = p.x, y = p.y, heading = 0, skill = "Average", playerCanDrive = false } } })
+  local cs = { group = gname, pos = p, name = name, enemies = {}, spawned = timer.getTime(), nextSmoke = 0 }
+  for _ = 1, math.random(c.enemyGroups[1], c.enemyGroups[2]) do
+    local ep = offset(p, math.random() * 2 * math.pi, randRange(c.enemyDist))
+    if okGround(ep) then
+      local en = nextId("CSARE")
+      groundGroup(D.cfg.redCountry, en, c.enemyTypes, math.random(c.enemySize[1], c.enemySize[2]), ep,
+        math.atan2(p.y - ep.y, p.x - ep.x), 30, D.hideOnMap())
+      cs.enemies[#cs.enemies + 1] = en
+      timer.scheduleFunction(safe(function() moveTo(en, p, c.enemySpeed, false) end, "CSAR"), nil, timer.getTime() + 2)
+    end
+  end
+  cs.mark = newMarkId()
+  trigger.action.markToCoalition(cs.mark, "CSAR: downed pilot " .. name .. "\n" .. D.fmtPos(p), toV3(p), D.cfg.blueSide, true)
+  D.csars[#D.csars + 1] = cs
+  msg(string.format("%s: CSAR – %s is down at %s. Enemy forces are closing in. "
+    .. "Land a helicopter next to the pilot and fly them to a friendly airfield or FARP. Jets: keep the enemy away!",
+    D.cfg.awacs.callsignName, name, D.fmtPos(p)))
+  return true
+end
+
+-- zufälliger Verbündeter: nahe dem Rand einer aktiven AO auf der eigenen Seite
+function D.spawnAllyCsar(force)
+  local aos = aoCandidates(nil)
+  if #aos == 0 then return false end
+  D.refreshBlueBases()
+  for _ = 1, 40 do
+    local ao = aos[math.random(#aos)]
+    local c0 = { x = ao.x, y = ao.y }
+    local b = nearestBlueBase(c0)
+    local hdg = b and math.atan2(b.y - c0.y, b.x - c0.x) or math.random() * 2 * math.pi
+    local p = offset(c0, hdg + (math.random() - 0.5) * 2, ao.radius + randRange({-10000, 10000}))
+    if okGround(p) and enemyGround(p, 15000) then
+      local cs = { "Viper", "Hawg", "Hornet", "Jedi", "Dude", "Pontiac" }
+      return D.spawnCsar(p, string.format("%s %d-%d", cs[math.random(#cs)], math.random(1, 9), math.random(1, 4)), force)
+    end
+  end
+  return false
+end
+
+function D.csarOnEject(e)
+  local c = D.cfg.csar
+  if not c.enabled or not c.playerEject then return end
+  local u = e.initiator
+  local ok, info = pcall(function()
+    return { side = u:getCoalition(), player = u:getPlayerName(), p = toV2(u:getPoint()) }
+  end)
+  if not ok or not info or info.side ~= D.cfg.blueSide or not info.player then return end
+  D.refreshBlueBases()
+  if not enemyGround(info.p, 10000) then return end
+  local p = offset(info.p, math.random() * 2 * math.pi, math.random() * 300)
+  timer.scheduleFunction(safe(function() D.spawnCsar(p, info.player, true) end, "CSAR"), nil, timer.getTime() + 60)
+end
+
+local function blueHelos()
+  local out = {}
+  for _, u in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+    local ok, cat = pcall(function() return u:getDesc().category end)
+    if ok and cat == Unit.Category.HELICOPTER and u:isExist() then out[#out + 1] = u end
+  end
+  return out
+end
+
+local function endCsar(cs, i, now)
+  clearMark(cs.mark)
+  destroyGroup(cs.group)
+  local en = cs.enemies
+  timer.scheduleFunction(function() for _, n in ipairs(en) do destroyGroup(n) end end, nil, now + 300)
+  table.remove(D.csars, i)
+end
+
+function D.csarTick(now)
+  local c = D.cfg.csar
+  for i = #D.csars, 1, -1 do
+    local cs = D.csars[i]
+    if cs.carrier then
+      local u = Unit.getByName(cs.carrier)
+      if not u or not u:isExist() then
+        msg(string.format("%s: Contact lost with the helicopter carrying %s – rescue failed.", D.cfg.awacs.callsignName, cs.name))
+        endCsar(cs, i, now)
+      elseif not u:inAir() then
+        local p = toV2(u:getPoint())
+        local home = not farFrom(p, D.blueBases, c.deliverDist)
+        for _, f in ipairs(D.farps or {}) do if dist(p, f.pos) < c.deliverDist then home = true end end
+        if home then
+          D.stats.csar = D.stats.csar + 1
+          msg(string.format("%s: %s delivered safely – CSAR complete! (%d total)", D.cfg.awacs.callsignName, cs.name, D.stats.csar))
+          endCsar(cs, i, now)
+        end
+      end
+    else
+      local pp = groupPos(cs.group)
+      if not pp then
+        msg(string.format("%s: %s is KIA – CSAR failed.", D.cfg.awacs.callsignName, cs.name))
+        endCsar(cs, i, now)
+      else
+        local captured = false
+        for _, en in ipairs(cs.enemies) do
+          local g = Group.getByName(en)
+          for _, eu in ipairs((g and g:isExist() and g:getUnits()) or {}) do
+            if eu:isExist() and eu:getLife() >= 1 and dist(toV2(eu:getPoint()), pp) < c.captureDist then captured = true end
+          end
+        end
+        if captured then
+          msg(string.format("%s: %s has been captured by enemy forces – CSAR failed.", D.cfg.awacs.callsignName, cs.name))
+          endCsar(cs, i, now)
+        elseif now - cs.spawned > c.timeout then
+          msg(string.format("%s: No more contact with %s – CSAR failed.", D.cfg.awacs.callsignName, cs.name))
+          endCsar(cs, i, now)
+        else
+          for _, h in ipairs(blueHelos()) do
+            local hp = toV2(h:getPoint())
+            local d = dist(hp, pp)
+            if d < c.smokeDist and now >= cs.nextSmoke then
+              trigger.action.smoke(toV3(pp), trigger.smokeColor.Green)
+              cs.nextSmoke = now + 300
+            end
+            if d < c.pickupDist and not h:inAir() then
+              cs.carrier = h:getName()
+              destroyGroup(cs.group)
+              clearMark(cs.mark)
+              cs.mark = nil
+              msg(string.format("%s: %s is aboard %s! Fly them to any friendly airfield or FARP.",
+                D.cfg.awacs.callsignName, cs.name, h:getPlayerName() or h:getName()))
+              break
+            end
+          end
+        end
+      end
+    end
+  end
+  if c.allyInterval and c.allyInterval[1] and c.allyInterval[1] > 0 then
+    if D.nextCsar == 0 then D.nextCsar = now + randRange(c.allyInterval) end
+    if now >= D.nextCsar then
+      D.nextCsar = now + randRange(c.allyInterval)
+      if #D.csars < c.maxActive then D.spawnAllyCsar() end
+    end
+  end
+end
+
+function D.reportCsar()
+  if #D.csars == 0 then msg("CSAR: No downed pilots.") return end
+  local lines = { "CSAR:" }
+  for _, cs in ipairs(D.csars) do
+    if cs.carrier then
+      lines[#lines + 1] = string.format("• %s – aboard %s, return to base", cs.name, cs.carrier)
+    else
+      local pp = groupPos(cs.group) or cs.pos
+      local nearest
+      for _, en in ipairs(cs.enemies) do
+        local ep = groupPos(en)
+        if ep then nearest = math.min(nearest or math.huge, dist(ep, pp)) end
+      end
+      lines[#lines + 1] = string.format("• %s at %s\n   enemy forces: %s", cs.name, D.fmtPos(pp),
+        nearest and string.format("%.1f km away", nearest / 1000) or "none")
+    end
+  end
+  msg(table.concat(lines, "\n"))
+end
+
+function D.smokeCsar()
+  local n = 0
+  for _, cs in ipairs(D.csars) do
+    local pp = not cs.carrier and groupPos(cs.group)
+    if pp then trigger.action.smoke(toV3(pp), trigger.smokeColor.Green); n = n + 1 end
+  end
+  msg(n > 0 and "CSAR: Downed pilots popping green smoke." or "CSAR: No pilot on the ground.")
 end
 
 -------------------------------------------------------------------------------
@@ -3571,6 +4657,11 @@ function D.activateAirbaseAO(name, front)
     casLeft = math.random(c.casPerAO[1], c.casPerAO[2]),
     samActive = 0, casActive = 0, state = "active", front = front,
   }
+  local aaa = D.cfg.sam.aaa
+  if aaa and math.random() < aaa.chance then
+    ao.aaaKey = weighted(aaa.pool)
+    ao.samLeft = ao.samLeft + 1
+  end
   if c.garrison then D.spawnGarrison(ao) end
   drawAO(ao)
   D.addAOWaypoint(ao)
@@ -4075,8 +5166,9 @@ function D.reportCampaign()
 end
 
 function D.reportStats()
-  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nFrontline battles won: %d\nBombers intercepted: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
-    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.battle, D.stats.bomber, D.stats.fortress, D.stats.cap, D.capturedCount))
+  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nFrontline battles won: %d\nBombers intercepted: %d\nScud launchers destroyed: %d\nPilots rescued: %d\nC-130s escorted: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
+    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.battle, D.stats.bomber,
+    D.stats.scud or 0, D.stats.csar or 0, D.stats.escort or 0, D.stats.fortress, D.stats.cap, D.capturedCount))
 end
 
 -------------------------------------------------------------------------------
@@ -4142,12 +5234,23 @@ function D.update()
   D.deepTick(now)
   D.ticTick(now, players)
   D.battleTick(now)
+  D.ambushTick(now, players)
+  D.chaosTick(now, players)
+  if D.cfg.scud.enabled then D.scudTick(now) end
+  if D.cfg.csar.enabled then D.csarTick(now) end
+  if D.cfg.escort.enabled then D.escortTick(now) end
   D.bomberTick(now)
   D.fortressTick(now)
 
   -- CAP
+  D.capPersistTick(now)
   for i = #D.caps, 1, -1 do
-    if groupAliveCount(D.caps[i].group) == 0 then
+    local c = D.caps[i]
+    if c.hunt and groupAliveCount(c.group) > 0 and now >= (c.nextHunt or 0) then
+      c.nextHunt = now + D.cfg.cap.huntUpdate
+      D.capHuntRoute(c)
+    end
+    if groupAliveCount(c.group) == 0 then
       table.remove(D.caps, i)
       D.stats.cap = D.stats.cap + 1
       msg(D.cfg.awacs.callsignName .. ": Hostile CAP destroyed. Picture clean.")
@@ -4294,13 +5397,19 @@ function D.buildMenu()
 
   if D.cfg.cap.enabled then
     local capMenu = sub(root, "A2A: Request enemy CAP")
-    cmd(capMenu, "Current difficulty", function() D.spawnCAP() end)
-    for i, td in ipairs(D.cfg.cap.tiers) do
-      local types = {}
-      for _, v in ipairs(td.variants) do types[#types + 1] = v.type end
-      cmd(capMenu, string.format("Level %d – %s (%s)", i, td.label, table.concat(types, "/")),
-        function() D.spawnCAP(i) end)
+    for _, m in ipairs({ { "patrol", "Patrol the AO" }, { "hunt", "Hunt nearest player" } }) do
+      local mm = sub(capMenu, m[2])
+      cmd(mm, "Current difficulty", function() D.spawnCAP(nil, m[1]) end)
+      for i, td in ipairs(D.cfg.cap.tiers) do
+        local types = {}
+        for _, v in ipairs(td.variants) do types[#types + 1] = v.type end
+        cmd(mm, string.format("Level %d – %s (%s)", i, td.label, table.concat(types, "/")),
+          function() D.spawnCAP(i, m[1]) end)
+      end
     end
+    cmd(capMenu, "Respawning CAP: toggle ON/OFF", D.toggleCapPersist)
+    if D.cfg.chaos.helos.enabled then cmd(capMenu, "Enemy helicopters: toggle ON/OFF", D.toggleHelos) end
+    cmd(capMenu, "Remove all enemy CAPs", D.removeCAPs)
   end
 
   if D.cfg.ship.enabled then
@@ -4314,16 +5423,30 @@ function D.buildMenu()
 
   local sq = sub(root, "Side Missions")
   if D.cfg.convoy.enabled then
-    cmd(sq, "Convoy: Request intercept tasking", D.requestConvoy)
-    cmd(sq, "Convoy: Status and route", D.reportConvoy)
+    local cm = sub(sq, "Convoy")
+    cmd(cm, "Request intercept tasking", D.requestConvoy)
+    cmd(cm, "Status and route", D.reportConvoy)
   end
   if D.cfg.deepStrike.enabled then
-    cmd(sq, "Deep Strike: Request tasking", D.requestDeepStrike)
-    cmd(sq, "Deep Strike: Status", D.reportDeepStrike)
+    local dm = sub(sq, "Deep Strike")
+    cmd(dm, "Request tasking", D.requestDeepStrike)
+    cmd(dm, "Status", D.reportDeepStrike)
   end
   if D.cfg.bomber.enabled then
-    cmd(sq, "Bomber: Request intercept tasking", D.requestBomber)
-    cmd(sq, "Bomber: Status", D.reportBomber)
+    local bo = sub(sq, "Bomber Intercept")
+    cmd(bo, "Request intercept tasking", D.requestBomber)
+    cmd(bo, "Status", D.reportBomber)
+  end
+  if D.cfg.scud.enabled then cmd(sq, "SCUD hunt: status", D.reportScud) end
+  if D.cfg.escort.enabled then
+    local em = sub(sq, "C-130 Escort")
+    cmd(em, "Request escort mission", D.requestEscort)
+    cmd(em, "Status", D.reportEscort)
+  end
+  if D.cfg.csar.enabled then
+    local cm = sub(sq, "CSAR")
+    cmd(cm, "Status and positions", D.reportCsar)
+    cmd(cm, "Downed pilots: green smoke", D.smokeCsar)
   end
   if D.cfg.battle.enabled then
     local bm = sub(sq, "Frontline Battle")
@@ -4348,6 +5471,14 @@ function D.buildMenu()
     if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
     cmd(dbg, "Write airfield list to dcs.log", D.debugListAirbases)
+    if D.cfg.ambush.enabled then cmd(dbg, "Spawn SAM ambush now", function() D.spawnAmbush(true) end) end
+    if D.cfg.scud.enabled then cmd(dbg, "Spawn Scud now (fires in 3 min)", function()
+      if D.scud then msg("DEBUG: Scud already active.") return end
+      if D.spawnScud(true) then D.scud.fireAt = timer.getTime() + 180 end
+    end) end
+    if D.cfg.csar.enabled then cmd(dbg, "Spawn CSAR now", function()
+      if not D.spawnAllyCsar(true) then msg("DEBUG: No valid CSAR position found.") end
+    end) end
   end
 end
 
@@ -4610,6 +5741,9 @@ function D.handler:onEvent(e)
       end
     elseif e.id == world.event.S_EVENT_SHOT then
       onShot(e)
+      if D.cfg.scud.enabled then D.scudOnShot(e) end
+    elseif e.id == world.event.S_EVENT_EJECTION then
+      D.csarOnEject(e)
     elseif e.id == world.event.S_EVENT_MARK_ADDED or e.id == world.event.S_EVENT_MARK_CHANGE then
       D.onMarkText(e)
     end
@@ -4736,12 +5870,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.51 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.61 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.51 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.61 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
