@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.46 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.47 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -58,7 +58,10 @@ D.cfg = {
     samPerAO        = {2, 3},
     casPerAO        = {1, 2},
     garrison        = true,
-    garrisonPercent = 70,
+    garrisonPercent = 100,         -- Garnison muss ganz zerstört werden (Nachzügler-Regel siehe straggler)
+    -- Nachzügler: bleiben von Garnison bzw. einer SAM-Stellung höchstens maxLeft Einheiten übrig, gilt sie nach
+    -- timeout s trotzdem als zerstört (Rest wird entfernt) – damit eine einzelne unauffindbare Einheit nichts blockiert
+    straggler       = { maxLeft = 1, timeout = 1200 },
     exclude         = {},          -- z.B. { "Mozdok", "Beslan" }
     maxDistance     = 0,           -- 0 = egal; sonst max. Entfernung zur nächsten blauen Basis
     aoSeparation    = 85000,       -- Mindestabstand der Mittelpunkte gleichzeitig aktiver AOs (m), ca. 2 x aoRadius + Puffer: Kreise überlappen nicht
@@ -140,6 +143,7 @@ D.cfg = {
     respawnDelay      = {120, 300},
     minSeparation     = 12000,
     shoradChance      = 0.5,
+    killAll           = true,      -- Stellung erst zerstört, wenn alle Radare, Gefechtsstände UND Startgeräte zerstört sind (Nahbereichsflak zählt nicht)
     cleanupAfter      = 900,
     armEvasion = {
       enabled       = true,
@@ -1152,9 +1156,11 @@ local function buildSamUnits(def, c, gname)
   end
   local critTrack = (def.critical == "track" or def.critical == "all")
   local critLn = (def.critical == "ln" or def.critical == "all")
+  local all = D.cfg.sam.killAll
+  if all then critTrack, critLn = true, true end
   for _, t in ipairs(def.track or {}) do add(t, 0, 0, critTrack) end
-  for i, t in ipairs(def.search or {}) do add(t, -180 * i, 120, false) end
-  for i, t in ipairs(def.extra or {}) do add(t, 120 * i, -150, false) end
+  for i, t in ipairs(def.search or {}) do add(t, -180 * i, 120, all) end
+  for i, t in ipairs(def.extra or {}) do add(t, 120 * i, -150, all) end
   for i = 1, def.nLn do
     local a = hdg + (i - 1) * 2 * math.pi / def.nLn
     add(def.ln, def.r * math.cos(a), def.r * math.sin(a), critLn)
@@ -3637,11 +3643,29 @@ function D.captureAO(ao)
   D.repositionTankers()
 end
 
+-- Nachzügler-Regel: höchstens straggler.maxLeft Einheiten übrig -> nach straggler.timeout s erledigt (obj merkt sich den Start)
+function D.stragglerDone(obj, alive, now, label)
+  local c = D.cfg.campaign.straggler
+  if not c or alive > c.maxLeft then obj.stragglerSince = nil return false end
+  if not obj.stragglerSince then
+    obj.stragglerSince = now
+    msg(string.format("%s: %d unit%s left – counts as destroyed in %d min if not found.",
+      label, alive, alive == 1 and "" or "s", math.floor(c.timeout / 60 + 0.5)))
+    return false
+  end
+  return now - obj.stragglerSince >= c.timeout
+end
+
 function D.checkAOs(now)
   for _, ao in ipairs(D.aos) do
     if ao.garrison and not ao.garrisonDone then
-      local destroyed = 1 - groupAliveCount(ao.garrison) / ao.garrisonInit
-      if destroyed * 100 >= D.cfg.campaign.garrisonPercent then
+      local alive = groupAliveCount(ao.garrison)
+      local destroyed = 1 - alive / ao.garrisonInit
+      ao.garrisonStraggler = ao.garrisonStraggler or {}
+      local strag = alive > 0 and D.stragglerDone(ao.garrisonStraggler, alive, now,
+        string.format("[%s] Airfield garrison", ao.name))
+      if strag or destroyed * 100 >= D.cfg.campaign.garrisonPercent then
+        if strag then destroyGroup(ao.garrison) end
         ao.garrisonDone = true
         msg(string.format("[%s] Airfield garrison neutralized.", ao.name))
       end
@@ -4034,7 +4058,8 @@ function D.reportCampaign()
     lines[#lines + 1] = string.format("• %s%s\n   SAM left: %d | CAS left: %d | Garrison: %s\n   %s",
       ao.name .. (ao.front and (" – " .. ao.front.name .. " front") or ""), ao.state == "capturing" and " (capture in progress)" or "",
       ao.samLeft + ao.samActive, ao.casLeft + ao.casActive,
-      ao.garrison and (ao.garrisonDone and "neutralized" or "active") or "–",
+      ao.garrison and (ao.garrisonDone and "neutralized"
+        or string.format("%d/%d left", groupAliveCount(ao.garrison), ao.garrisonInit)) or "–",
       D.fmtPos({ x = ao.x, y = ao.y }))
   end
   if D.cfg.fortress.enabled then lines[#lines + 1] = D.fortressStatus() end
@@ -4060,9 +4085,14 @@ function D.update()
   -- SAM
   for i = #D.sites, 1, -1 do
     local s = D.sites[i]
-    local dead = true
+    local alive = 0
     for _, n in ipairs(s.critical) do
-      if unitAlive(n) then dead = false break end
+      if unitAlive(n) then alive = alive + 1 end
+    end
+    local dead = alive == 0
+    if not dead and D.stragglerDone(s, alive, now, string.format("SEAD [%s]: %s site", s.ao.name, s.def.name)) then
+      dead = true
+      destroyGroup(s.group)
     end
     if dead then
       table.remove(D.sites, i)
@@ -4701,12 +4731,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.46 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.47 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.46 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.47 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
