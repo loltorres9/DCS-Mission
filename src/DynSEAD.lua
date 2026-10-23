@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.54 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.55 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -182,7 +182,8 @@ D.cfg = {
       dist   = 600,
     },
     -- Ungefähre Einsatzreichweite je Typ (m); Hinterhalt schaltet bei Reichweite * ambushFactor ein
-    engageRange       = { SA2 = 45000, SA3 = 25000, SA6 = 25000, SA11 = 35000, SA8 = 10000, SA15 = 12000, SA5 = 150000, SA10 = 90000 },
+    engageRange       = { SA2 = 45000, SA3 = 25000, SA6 = 25000, SA11 = 35000, SA8 = 10000, SA15 = 12000, SA5 = 150000, SA10 = 90000,
+                          SA9 = 4000, SA13 = 5000 },
     ambushFactor      = 1.5,
     ambushHold        = 90,        -- Radar bleibt nach Auslösen mind. X s an
     ambushRange       = 30000,     -- Fallback für Typen ohne engageRange
@@ -510,7 +511,8 @@ D.cfg = {
     enabled      = true,
     maxActive    = 3,
     interval     = {600, 1200},    -- s zwischen zwei Spawn-Versuchen
-    pool         = { SA8 = 4, SA6 = 3, SA11 = 1, SA15 = 1 },
+    -- ältere, weniger tödliche Systeme (Nutzerwunsch); ohne SA-8-Punktverteidigung
+    pool         = { SA3 = 3, SA2 = 2, SA6 = 2, SA9 = 3, SA13 = 2 },
     margin       = 15000,          -- m hinter dem AO-Rand (von blauen Basen aus gesehen)
     baseRadius   = {8000, 40000},  -- Abstand zum gewählten roten Flugplatz
     maxBlueDist  = 250000,         -- nicht weiter als X m von der nächsten blauen Basis (dort fliegt niemand)
@@ -568,6 +570,9 @@ D.samTypes = {
            extra = {"SA-11 Buk CC 9S470M1"}, ln = "SA-11 Buk LN 9A310M1", nLn = 4, r = 160, critical = "ln" },
   SA8  = { name = "SA-8 Gecko", track = {}, search = {}, ln = "Osa 9A33 ln", nLn = 2, r = 250, critical = "ln" },
   SA15 = { name = "SA-15 Gauntlet", track = {}, search = {}, ln = "Tor 9A331", nLn = 2, r = 250, critical = "ln" },
+  -- nur für Hinterhalte (cfg.ambush): ältere IR-Systeme ohne Radar
+  SA9  = { name = "SA-9 Gaskin", track = {}, search = {}, ln = "Strela-1 9P31", nLn = 2, r = 150, critical = "ln" },
+  SA13 = { name = "SA-13 Gopher", track = {}, search = {}, ln = "Strela-10M3", nLn = 2, r = 150, critical = "ln" },
   -- nur für die Hauptbasis (nicht im Pool); Typnamen ungetestet. critical = "all": Zielradar UND alle Startgeräte müssen fallen
   SA5  = { name = "SA-5 Gammon (S-200)", track = {"RPC_5N62V"}, search = {"RLS_19J6"},
            ln = "S-200_Launcher", nLn = 4, r = 150, critical = "all" },
@@ -1354,7 +1359,7 @@ function D.createSam(ao, key, p, forceMode)
   ao.samActive = ao.samActive + 1
 
   local pd = D.cfg.sam.pointDefense
-  if pd and pd.types[key] and math.random() < pd.chance then
+  if pd and pd.types[key] and not ao.ambush and math.random() < pd.chance then
     local pp = offset(p, math.random() * 2 * math.pi, pd.dist)
     site.pdGroup = gname .. "-PD"
     D.addGround(D.cfg.redCountry, {
@@ -5051,12 +5056,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.54 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.55 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.54 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.55 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
