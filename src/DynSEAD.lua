@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.60 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.61 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -568,6 +568,23 @@ D.cfg = {
     minBlueDist   = 60000,
   },
 
+  -- Eskorte: eine verbündete C-130 fliegt vom hintersten zum vordersten eigenen Flugplatz; sie wartet am Treffpunkt
+  -- auf Begleitschutz, unterwegs starten feindliche Abfangjäger gegen sie (aktuelle CAP-Stufe)
+  escort = {
+    enabled       = true,
+    autoInterval  = {3600, 5400},  -- s zwischen automatischen Eskortaufträgen (0/nil = nur per F10)
+    type          = "C-130",
+    alt           = 6000,          -- m
+    speed         = 140,           -- m/s
+    minRoute      = 120000,        -- Mindeststrecke; sonst Start in der Luft weiter hinten
+    holdTime      = 900,           -- s am Treffpunkt warten, bis ein Spieler-Jet näher als joinDist ist
+    joinDist      = 18500,         -- 10 NM
+    waves         = { 0.3, 0.65 }, -- Abfangwellen bei diesem Anteil der Strecke (zweite nur ab longRoute)
+    longRoute     = 200000,
+    interceptDist = 90000,         -- Abfangjäger erscheinen so weit von der C-130 entfernt, Richtung Feindgebiet
+    huntUpdate    = 30,
+  },
+
   -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
   -- müssen per Hubschrauber abgeholt und zu einem eigenen Flugplatz/FARP gebracht werden; Feindfahrzeuge rücken an
   csar = {
@@ -715,7 +732,7 @@ D.counter       = 0
 D.markId        = 7000
 D.started       = false
 D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0, battle = 0,
-                    scud = 0, csar = 0 }
+                    scud = 0, csar = 0, escort = 0 }
 D.blueBases     = {}
 D.nextSam       = math.huge
 D.nextCas       = math.huge
@@ -2717,6 +2734,209 @@ function D.chaosTick(now, players)
   if cc.helos.enabled and D.heloOn and #D.helos < cc.helos.maxActive and now >= D.nextHelo then
     D.nextHelo = now + randRange(cc.helos.interval)
     D.spawnHelo()
+  end
+end
+
+-------------------------------------------------------------------------------
+-- ESKORTE: verbündete C-130
+-------------------------------------------------------------------------------
+D.escort, D.nextEscort = nil, 0
+
+local function blueJets()
+  local out = {}
+  for _, u in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+    local ok, cat = pcall(function() return u:getDesc().category end)
+    if ok and cat == Unit.Category.AIRPLANE and u:isExist() and u:inAir() then out[#out + 1] = toV2(u:getPoint()) end
+  end
+  return out
+end
+
+-- Ziel = eigener Platz, der einer aktiven AO am nächsten ist; Start = am weitesten entfernter eigener Platz
+function D.requestEscort()
+  local c = D.cfg.escort
+  if D.escort then msg("ESCORT: A C-130 escort mission is already running.") return false end
+  D.refreshBlueBases()
+  if #D.blueBases == 0 then return false end
+  local aos = aoCandidates(nil)
+  local function frontDist(b)
+    local d = math.huge
+    for _, ao in ipairs(aos) do d = math.min(d, dist(b, { x = ao.x, y = ao.y })) end
+    return d
+  end
+  local dest, origin
+  for _, b in ipairs(D.blueBases) do
+    if not dest or frontDist(b) < frontDist(dest) then dest = b end
+  end
+  for _, b in ipairs(D.blueBases) do
+    if b ~= dest and dist(b, dest) >= c.minRoute and (not origin or dist(b, dest) > dist(origin, dest)) then origin = b end
+  end
+  local destAb
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    if ab:getName() == dest.name then destAb = ab end
+  end
+  if not destAb then return false end
+  -- Treffpunkt/Start: über dem Startplatz oder, wenn keiner weit genug weg ist, hinter dem Ziel (weg von der Front)
+  local start
+  if origin then
+    start = { x = origin.x, y = origin.y }
+  else
+    local away = math.random() * 2 * math.pi
+    if #aos > 0 then
+      local ao = aos[1]
+      for _, a in ipairs(aos) do if dist(dest, { x = a.x, y = a.y }) < dist(dest, { x = ao.x, y = ao.y }) then ao = a end end
+      away = math.atan2(dest.y - ao.y, dest.x - ao.x)
+    end
+    start = offset(dest, away, c.minRoute)
+  end
+  local gname = nextId("ESC")
+  local hdg = math.atan2(dest.y - start.y, dest.x - start.x)
+  local callsign = "Kingfish " .. math.random(1, 9) .. "-1"
+  coalition.addGroup(D.cfg.blueCountry, Group.Category.AIRPLANE, {
+    name = gname, task = "Transport", uncontrolled = false,
+    units = { { name = gname .. "-1", type = c.type, x = start.x, y = start.y, alt = c.alt, alt_type = "BARO",
+                speed = c.speed, heading = hdg, skill = "High", payload = { pylons = {}, fuel = 20830, flare = 60, chaff = 120, gun = 100 } } },
+    route = { points = { airWP(start, c.alt, c.speed, { { number = 1, enabled = true, auto = false, id = "Orbit",
+      params = { pattern = "Circle", point = start, speed = c.speed, altitude = c.alt } } }) } },
+  })
+  local g = Group.getByName(gname)
+  if not g or not g:isExist() then
+    reportError("Escort", "C-130 could not be spawned – check cfg.escort.type")
+    return false
+  end
+  local total = dist(start, dest)
+  local mark = newMarkId()
+  trigger.action.lineToAll(D.cfg.blueSide, mark, toV3(start), toV3(dest), {0.2, 0.6, 1, 0.9}, 2, true, "C-130 route")
+  D.escort = { group = gname, unit = gname .. "-1", callsign = callsign, start = start, dest = dest, destAb = destAb,
+               total = total, state = "hold", holdUntil = timer.getTime() + c.holdTime, wave = 1, mark = mark, interceptors = {} }
+  msg(string.format("ESCORT: %s (C-130) is holding at %s, angels %d, waiting for escort (up to %d min).\n"
+    .. "Destination: %s, %d NM. Expect enemy interceptors en route – keep the Hercules alive!",
+    callsign, bullseyeStr(start), math.floor(c.alt * 3.28084 / 1000 + 0.5), math.floor(c.holdTime / 60),
+    dest.name or "front airfield", math.floor(total / 1852 + 0.5)))
+  return true
+end
+
+local function escortDepart(es)
+  local c = D.cfg.escort
+  local g = Group.getByName(es.group)
+  if not g or not g:isExist() then return end
+  local p = groupPos(es.group) or es.start
+  local lwp = { x = es.dest.x, y = es.dest.y, alt = 0, alt_type = "RADIO", type = "Land", action = "Landing",
+                airdromeId = es.destAb:getID(), speed = 80, speed_locked = true, ETA = 0, ETA_locked = false,
+                task = { id = "ComboTask", params = { tasks = {} } } }
+  g:getController():setTask({ id = "Mission", params = { route = { points = { airWP(p, c.alt, c.speed, {}), lwp } } } })
+end
+
+-- Abfangjäger: kommen aus Richtung Feindgebiet und jagen die C-130 (Route alle huntUpdate s neu)
+local function escortIntercept(es, cp)
+  local c, cap = D.cfg.escort, D.cfg.cap
+  local enemy
+  for _, a in ipairs(redAirbases(0)) do
+    if not enemy or dist(a.p, cp) < dist(enemy, cp) then enemy = a.p end
+  end
+  local dir = enemy and math.atan2(enemy.y - cp.y, enemy.x - cp.x) or math.random() * 2 * math.pi
+  local sp = offset(cp, dir, c.interceptDist)
+  local td = cap.tiers[D.currentCapTier()]
+  local v = td.variants[math.random(#td.variants)]
+  local lo = D.capLoadouts[v.loadout]
+  local gname = nextId("INT")
+  local units = {}
+  for i = 1, cap.size do
+    units[i] = { name = gname .. "-" .. i, type = v.type, x = sp.x - 300 * (i - 1), y = sp.y + 300 * (i - 1),
+      alt = cap.alt, alt_type = "BARO", speed = cap.speed, heading = dir + math.pi, skill = td.skill or D.cfg.skill,
+      payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil }
+  end
+  local tasks = { { number = 1, enabled = true, auto = false, id = "EngageTargets",
+                    params = { targetTypes = { "Air" }, priority = 0 } } }
+  coalition.addGroup(D.cfg.redCountry, Group.Category.AIRPLANE, {
+    name = gname, task = "CAP", uncontrolled = false, units = units,
+    route = { points = { airWP(sp, cap.alt, cap.speed, tasks), airWP(cp, cap.alt, cap.speed * 1.2, {}) } },
+  })
+  es.interceptors[#es.interceptors + 1] = gname
+  msg(string.format("%s: Hostile interceptors – %dx %s – launched toward %s from %s, %s!",
+    D.cfg.awacs.callsignName, cap.size, v.type, es.callsign,
+    string.format("%03d°", math.floor((math.deg(math.atan2(sp.y - cp.y, sp.x - cp.x)) + 360) % 360 + 0.5)),
+    string.format("%d NM", math.floor(c.interceptDist / 1852 + 0.5))))
+end
+
+function D.reportEscort()
+  local es = D.escort
+  if not es then msg("ESCORT: No C-130 escort mission running.") return end
+  local p = groupPos(es.group)
+  if not p then msg("ESCORT: Contact lost.") return end
+  local left = dist(p, es.dest)
+  local hostile = 0
+  for _, n in ipairs(es.interceptors) do if groupAliveCount(n) > 0 then hostile = hostile + 1 end end
+  msg(string.format("ESCORT: %s at %s, %s. %d NM to %s. Hostile interceptor groups: %d.",
+    es.callsign, bullseyeStr(p), es.state == "hold" and "holding for escort" or "en route",
+    math.floor(left / 1852 + 0.5), es.dest.name or "destination", hostile))
+end
+
+local function endEscort(es, now)
+  trigger.action.removeMark(es.mark)
+  local g, ints = es.group, es.interceptors
+  timer.scheduleFunction(function()
+    destroyGroup(g)
+    for _, n in ipairs(ints) do destroyGroup(n) end
+  end, nil, now + 600)
+  D.escort = nil
+  local c = D.cfg.escort
+  if c.autoInterval and c.autoInterval[1] and c.autoInterval[1] > 0 then D.nextEscort = now + randRange(c.autoInterval) end
+end
+
+function D.escortTick(now)
+  local c = D.cfg.escort
+  local es = D.escort
+  if not es then
+    if c.autoInterval and c.autoInterval[1] and c.autoInterval[1] > 0 then
+      if D.nextEscort == 0 then D.nextEscort = now + randRange(c.autoInterval) end
+      if now >= D.nextEscort then
+        D.nextEscort = now + 600
+        if #aoCandidates(nil) > 0 then D.requestEscort() end
+      end
+    end
+    return
+  end
+  local u = Unit.getByName(es.unit)
+  if not u or not u:isExist() or u:getLife() < 1 then
+    msg(string.format("ESCORT: %s has been shot down – mission failed.", es.callsign))
+    endEscort(es, now)
+    return
+  end
+  local p = toV2(u:getPoint())
+  if es.state == "hold" then
+    if now >= es.holdUntil or not farFrom(p, blueJets(), c.joinDist) then
+      es.state = "enroute"
+      escortDepart(es)
+      msg(string.format("ESCORT: %s %s – departing for %s.", es.callsign,
+        now >= es.holdUntil and "could not wait any longer" or "has its escort", es.dest.name or "destination"))
+    end
+  elseif es.state == "enroute" then
+    if u:inAir() then es.wasAirborne = true end
+    local progress = 1 - dist(p, es.dest) / es.total
+    local w = c.waves[es.wave]
+    if w and progress >= w and (es.wave == 1 or es.total >= c.longRoute) then
+      escortIntercept(es, p)
+      es.wave = es.wave + 1
+    end
+    if now >= (es.nextHunt or 0) then
+      es.nextHunt = now + c.huntUpdate
+      for _, n in ipairs(es.interceptors) do
+        local g = Group.getByName(n)
+        local ip = groupPos(n)
+        if g and g:isExist() and ip then
+          g:getController():setTask({ id = "Mission", params = { route = { points = {
+            airWP(ip, D.cfg.cap.alt, D.cfg.cap.speed, { { number = 1, enabled = true, auto = false, id = "EngageTargets",
+              params = { targetTypes = { "Air" }, priority = 0 } } }),
+            airWP(p, D.cfg.cap.alt, D.cfg.cap.speed * 1.2, {}) } } } })
+        end
+      end
+    end
+    if es.wasAirborne and not u:inAir() and dist(p, es.dest) < 5000 then
+      D.stats.escort = D.stats.escort + 1
+      msg(string.format("ESCORT: %s has landed at %s – cargo delivered, good escort! (%d total)",
+        es.callsign, es.dest.name or "destination", D.stats.escort))
+      endEscort(es, now)
+    end
   end
 end
 
@@ -4946,9 +5166,9 @@ function D.reportCampaign()
 end
 
 function D.reportStats()
-  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nFrontline battles won: %d\nBombers intercepted: %d\nScud launchers destroyed: %d\nPilots rescued: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
+  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nFrontline battles won: %d\nBombers intercepted: %d\nScud launchers destroyed: %d\nPilots rescued: %d\nC-130s escorted: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
     D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.battle, D.stats.bomber,
-    D.stats.scud or 0, D.stats.csar or 0, D.stats.fortress, D.stats.cap, D.capturedCount))
+    D.stats.scud or 0, D.stats.csar or 0, D.stats.escort or 0, D.stats.fortress, D.stats.cap, D.capturedCount))
 end
 
 -------------------------------------------------------------------------------
@@ -5018,6 +5238,7 @@ function D.update()
   D.chaosTick(now, players)
   if D.cfg.scud.enabled then D.scudTick(now) end
   if D.cfg.csar.enabled then D.csarTick(now) end
+  if D.cfg.escort.enabled then D.escortTick(now) end
   D.bomberTick(now)
   D.fortressTick(now)
 
@@ -5217,6 +5438,11 @@ function D.buildMenu()
     cmd(bo, "Status", D.reportBomber)
   end
   if D.cfg.scud.enabled then cmd(sq, "SCUD hunt: status", D.reportScud) end
+  if D.cfg.escort.enabled then
+    local em = sub(sq, "C-130 Escort")
+    cmd(em, "Request escort mission", D.requestEscort)
+    cmd(em, "Status", D.reportEscort)
+  end
   if D.cfg.csar.enabled then
     local cm = sub(sq, "CSAR")
     cmd(cm, "Status and positions", D.reportCsar)
@@ -5644,12 +5870,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.60 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.61 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.60 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.61 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
