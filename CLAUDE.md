@@ -127,7 +127,7 @@ Gespielt wird mit **Dynamic Spawn** (kein SRS!). Muster: F-16C, F/A-18C, A-10C I
 3. MiG-23-Loadouts (`D.capLoadouts`) unsicher – Skript meldet „spawned WITHOUT missiles“, dann Pylone korrigieren.
 4. Vorlagen für F/A-18C, A-10C II, AJS-37 (Land Schweden), AH-64D noch nicht im Spiel getestet.
 5. TACAN-Befehl der Tanker (`ActivateBeacon`) ungetestet.
-6. **Vorlagen aus der Slot-Liste ausblenden:** Versuch mit neutralem Land Schweiz (`tplside … neutral`, Forenbericht) ist gescheitert: danach waren bei der F-16 alle Steuerpunkte leer (Dynamic Spawn nutzt neutrale Vorlagen offenbar nicht). Vorlagen wieder blau (`tplside … blue`). Die Vorlagen erscheinen damit weiter als Slots; offen, ob sich das anders lösen lässt.
+6. **Vorlagen aus der Slot-Liste ausblenden:** Versuch mit neutralem Land Schweiz (`tplside … neutral`, Forenbericht) ist gescheitert: danach waren bei der F-16 alle Steuerpunkte leer. Mit Vorlagen wieder blau (`tplside … blue`) sind sie da (im Spiel bestätigt) – Dynamic Spawn nutzt nur Vorlagen der eigenen Koalition. Die Vorlagen erscheinen damit weiter als Slots; offen, ob sich das anders lösen lässt.
 7. **Kampagnenstand speichern (v4.45, `cfg.persistence`)** ungetestet im Spiel: (a) Datei `lfs.writedir()..DynSEAD_save_<Karte>.txt` (einfaches Textformat: fortress, captured=Name|Front, stat=…),
    geschrieben nach jeder Eroberung und alle 120 s, beim Missionsstart gelesen (`D.initPersistence` → `D.applySave`). Braucht auf dem Server in `Scripts\MissionScripting.lua` auskommentiertes
    `sanitizeModule('io')` und `sanitizeModule('lfs')` (jedes DCS-Update setzt das zurück); ohne io/lfs nur Code. (b) Spielstand-Code (Kartenbuchstabe + Hauptbasis-Index + Bitmaske über die sortierte
