@@ -176,10 +176,11 @@ def cmd_embed(a):
     miz.save(a.out)
 
 # ----------------------------------------------------------------- templates
-# max. WP = Zielpunkte nach dem Startpunkt: F-16 Route STPT 1–24 (25 = Bullseye), F/A-18 WP 0–59, Viggen B1–B9,
+# max. WP = Zielpunkte nach dem Startpunkt: F-16 Test mit voller Route (STPT 1–24 sicher, 25 = Bullseye; Nutzer: auch
+# höhere Nummern nutzbar – bei Problemen wieder 23), F/A-18 WP 0–59, Viggen B1–B9,
 # AH-64D W01–W50, CH-47F angenommen wie AH-64D; reicht der Speicher nicht, wird die Route gleichmäßig ausgedünnt
 TYPES = [  # typ, Kategorie, Gruppen-Task, Land(id,name), Höhe m, Höhentyp, Speed m/s, max. WP, Sprit kg, Label
-    ("F-16C_50",      "planes",      "CAP",           (2, "USA"),     7620, "BARO",  220.97, 23, 3104, "F-16"),
+    ("F-16C_50",      "planes",      "CAP",           (2, "USA"),     7620, "BARO",  220.97, 99, 3104, "F-16"),
     ("FA-18C_hornet", "planes",      "CAP",           (2, "USA"),     7620, "BARO",  220.97, 59, 4900, "F/A-18C"),
     ("A-10C_2",       "planes",      "CAS",           (2, "USA"),     4572, "BARO",  150.0,  99, 5029, "A-10C II"),
     ("AJS37",         "planes",      "Ground Attack", (46, "Sweden"), 3000, "BARO",  220.97,  9, 4476, "AJS-37"),
