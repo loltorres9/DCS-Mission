@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.53 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.54 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -501,6 +501,21 @@ D.cfg = {
     markUpdate     = 30,
     maxTime        = 5400,
     cleanupAfter   = 600,
+  },
+
+  -- SAM-Hinterhalte tief im Feindgebiet: einzelne Stellungen im Modus "ambush" (Radar erst bei Annäherung an),
+  -- nur HINTER den aktiven AOs (weiter von der nächsten blauen Basis entfernt als die nächste AO + Radius + margin),
+  -- nie zwischen eigenen Basen und den aktiven AOs; ohne Meldung, nicht im Lagebild, zählen nicht für die Eroberung
+  ambush = {
+    enabled      = true,
+    maxActive    = 3,
+    interval     = {600, 1200},    -- s zwischen zwei Spawn-Versuchen
+    pool         = { SA8 = 4, SA6 = 3, SA11 = 1, SA15 = 1 },
+    margin       = 15000,          -- m hinter dem AO-Rand (von blauen Basen aus gesehen)
+    baseRadius   = {8000, 40000},  -- Abstand zum gewählten roten Flugplatz
+    maxBlueDist  = 250000,         -- nicht weiter als X m von der nächsten blauen Basis (dort fliegt niemand)
+    lifetime     = {3600, 7200},   -- s; danach abgebaut, sofern kein Spieler näher als despawnRange ist
+    despawnRange = 60000,
   },
 
   cap = {
@@ -1200,7 +1215,7 @@ end
 
 function D.spawnSam()
   local n = 0
-  for _, st in ipairs(D.sites) do if not st.ao.fortress then n = n + 1 end end   -- Hauptbasis zählt nicht mit
+  for _, st in ipairs(D.sites) do if not st.ao.fortress and not st.ao.ambush then n = n + 1 end end   -- Hauptbasis/Hinterhalte zählen nicht mit
   if n >= D.cfg.sam.maxActive then return false end
   local aos = aoCandidates("samLeft")
   if #aos == 0 then return false end
@@ -1229,6 +1244,95 @@ function D.nextSamKey(ao)
   end
   if #ao.samPlan > 0 then return table.remove(ao.samPlan, 1) end
   return weighted(cfg.pool)
+end
+
+-------------------------------------------------------------------------------
+-- SAM-HINTERHALTE im inaktiven Feindgebiet (hinter den aktiven AOs)
+-------------------------------------------------------------------------------
+D.nextAmbush = 0
+
+-- liegt p "hinter" den AOs? (weiter von Blau entfernt als die nächste aktive AO samt Radius + margin)
+function D.ambushSpotOk(p)
+  local c = D.cfg.ambush
+  local b = nearestBlueBase(p)
+  if not b then return false end
+  local dB = dist(p, b)
+  if dB > c.maxBlueDist then return false end
+  local nearest, nd
+  for _, ao in ipairs(D.aos) do
+    local q = { x = ao.x, y = ao.y }
+    local d = dist(p, q)
+    if d < ao.radius + c.margin then return false end
+    if not nd or d < nd then nearest, nd = ao, d end
+  end
+  if nearest then
+    local q = { x = nearest.x, y = nearest.y }
+    local bq = nearestBlueBase(q)
+    if bq and dB < dist(q, bq) + nearest.radius + c.margin then return false end
+  elseif dB < c.margin * 4 then
+    return false
+  end
+  if D.fortress and D.fortress.ao and dist(p, D.fortress.ao) < 30000 then return false end
+  for _, sz in ipairs(D.safeZones or {}) do
+    if dist(p, sz) < sz.r then return false end
+  end
+  return true
+end
+
+function D.spawnAmbush(force)
+  local c = D.cfg.ambush
+  local n = 0
+  for _, st in ipairs(D.sites) do if st.ao.ambush then n = n + 1 end end
+  if n >= c.maxActive then return false end
+  D.refreshBlueBases()
+  -- rote Flugplätze (ohne aktive AOs) als Anker: Hinterhalte liegen im Hinterland, nicht im Niemandsland
+  local anchors = {}
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local okc, desc = pcall(function() return ab:getDesc() end)
+    if okc and desc and desc.category == Airbase.Category.AIRDROME and ab:getCoalition() == D.cfg.redSide
+       and not D.ignoredBase(ab) then
+      anchors[#anchors + 1] = toV2(ab:getPoint())
+    end
+  end
+  if #anchors == 0 then return false end
+  local players = playerPositions()
+  local avoid = {}
+  for _, st in ipairs(D.sites) do avoid[#avoid + 1] = st.pos end
+  for _ = 1, 60 do
+    local a = anchors[math.random(#anchors)]
+    local p = offset(a, math.random() * 2 * math.pi, randRange(c.baseRadius))
+    p = D.nearRoad(p) or p
+    if okGround(p) and D.ambushSpotOk(p) and farFrom(p, avoid, D.cfg.sam.minSeparation)
+       and farFrom(p, players, D.cfg.minDistPlayers) and (force or D.samSpotClear(p)) then
+      local key = weighted(c.pool)
+      local ao = { name = "Ambush", x = p.x, y = p.y, radius = 8000, samLeft = 1, samActive = 0, ambush = true,
+                   expires = timer.getTime() + randRange(c.lifetime) }
+      D.createSam(ao, key, p, "ambush")
+      env.info(string.format("DynSEAD: ambush %s at %s", key, D.fmtPos(p)))
+      if force then msg(string.format("DEBUG: Ambush %s spawned at %s", D.samTypes[key].name, D.fmtPos(p))) end
+      return true
+    end
+  end
+  if force then msg("DEBUG: No valid ambush position found.") end
+  return false
+end
+
+function D.ambushTick(now, players)
+  local c = D.cfg.ambush
+  if not c.enabled then return end
+  for i = #D.sites, 1, -1 do
+    local s = D.sites[i]
+    if s.ao.ambush and now >= s.ao.expires and farFrom(s.pos, players, c.despawnRange) then
+      destroyGroup(s.group)
+      if s.pdGroup then destroyGroup(s.pdGroup) end
+      table.remove(D.sites, i)
+    end
+  end
+  if D.nextAmbush == 0 then D.nextAmbush = now + randRange(c.interval) end   -- erster Hinterhalt nicht sofort
+  if now >= D.nextAmbush then
+    D.nextAmbush = now + randRange(c.interval)
+    D.spawnAmbush()
+  end
 end
 
 -- Eine SAM-Stellung des Typs key an Position p in der AO ao erzeugen
@@ -4340,6 +4444,7 @@ function D.update()
   D.deepTick(now)
   D.ticTick(now, players)
   D.battleTick(now)
+  D.ambushTick(now, players)
   D.bomberTick(now)
   D.fortressTick(now)
 
@@ -4557,6 +4662,7 @@ function D.buildMenu()
     if D.cfg.mode == "airbases" then cmd(dbg, "Clear current AO now", D.debugCapture) end
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
     cmd(dbg, "Write airfield list to dcs.log", D.debugListAirbases)
+    if D.cfg.ambush.enabled then cmd(dbg, "Spawn SAM ambush now", function() D.spawnAmbush(true) end) end
   end
 end
 
@@ -4945,12 +5051,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.53 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.54 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.53 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.54 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
