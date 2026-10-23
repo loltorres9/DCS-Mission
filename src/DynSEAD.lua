@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.57 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.58 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -524,7 +524,7 @@ D.cfg = {
     despawnRange = 60000,
   },
 
-  -- "Chaos" im Feindgebiet (Syrien der 2010er): kleine Gefechte, feindliche Hubschrauber, Zivilverkehr
+  -- "Chaos" im Feindgebiet (Syrien der 2010er): kleine Gefechte, feindliche Hubschrauber
   chaos = {
     skirmish = {                   -- kleine KI-Gefechte: US-Gerät (blau) gegen Regierungstruppen (rot)
       enabled     = true,
@@ -549,17 +549,6 @@ D.cfg = {
       dist        = {30000, 150000},  -- Strecke zwischen Start- und Zielplatz
       minBlueDist = 40000,
       timeout     = 3600,
-    },
-    civil = {                      -- Zivilverkehr (neutrale Koalition) auf Straßen im Feindgebiet, auch in den AOs
-      enabled     = true,
-      maxActive   = 8,
-      interval    = {60, 180},
-      types       = { "VAZ Car", "LAZ Bus", "GAZ-3307", "IKARUS Bus", "ZIL-4331", "KAMAZ Truck" },
-      size        = {1, 3},
-      trip        = {8000, 30000},
-      speed       = 14,
-      minBlueDist = 25000,
-      lifetime    = 2400,
     },
   },
 
@@ -2510,10 +2499,10 @@ function D.toggleCapPersist()
 end
 
 -------------------------------------------------------------------------------
--- CHAOS IM FEINDGEBIET: kleine Gefechte, feindliche Hubschrauber, Zivilverkehr
+-- CHAOS IM FEINDGEBIET: kleine Gefechte, feindliche Hubschrauber
 -------------------------------------------------------------------------------
-D.skirmishes, D.helos, D.civils = {}, {}, {}
-D.nextSkirmish, D.nextHelo, D.nextCivil = 0, 0, 0
+D.skirmishes, D.helos = {}, {}
+D.nextSkirmish, D.nextHelo = 0, 0
 D.heloOn = D.cfg.chaos.helos.startOn ~= false
 
 -- rote Flugplätze (Anker für Feindgebiet), optional mit Mindestabstand zu blauen Basen
@@ -2541,11 +2530,6 @@ local function enemyGround(p, minBlue)
     end
   end
   return best ~= nil and best:getCoalition() == D.cfg.redSide
-end
-
-local function neutralCountry()
-  for _, id in pairs(((env.mission or {}).coalitions or {}).neutrals or {}) do return id end
-  return nil
 end
 
 local function groundGroup(country, gname, types, n, c, hdg, spacing, hidden)
@@ -2661,51 +2645,6 @@ function D.toggleHelos()
   end
 end
 
--- Zivilverkehr: neutrale Fahrzeuge fahren auf Straßen von A nach B (auch durch AOs)
-function D.spawnCivil()
-  local c = D.cfg.chaos.civil
-  local cid = neutralCountry()
-  if not cid then return false end
-  local anchors = {}
-  for _, ao in ipairs(D.aos) do anchors[#anchors + 1] = { x = ao.x, y = ao.y } end
-  for _, a in ipairs(redAirbases(c.minBlueDist)) do anchors[#anchors + 1] = a.p end
-  if #anchors == 0 then return false end
-  for _ = 1, 20 do
-    local a = anchors[math.random(#anchors)]
-    local p = offset(a, math.random() * 2 * math.pi, randRange({0, 40000}))
-    local sx, sy = land.getClosestPointOnRoads("roads", p.x, p.y)
-    if sx then
-      local s0 = { x = sx, y = sy }
-      local dst = offset(s0, math.random() * 2 * math.pi, randRange(c.trip))
-      local ex, ey = land.getClosestPointOnRoads("roads", dst.x, dst.y)
-      if ex and dist(s0, { x = ex, y = ey }) > 3000 and enemyGround(s0, c.minBlueDist) then
-        local gname = nextId("CIV")
-        local hdg = math.atan2(ey - sy, ex - sx)
-        local n = math.random(c.size[1], c.size[2])
-        local units = {}
-        for i = 1, n do
-          local o = offset(s0, hdg + math.pi, (i - 1) * 25)
-          units[i] = { name = gname .. "-" .. i, type = c.types[math.random(#c.types)], x = o.x, y = o.y,
-                       heading = hdg, skill = "Average", playerCanDrive = false }
-        end
-        D.addGround(cid, { name = gname, task = "Ground Nothing", units = units, route = { points = {
-          { x = sx, y = sy, type = "Turning Point", action = "On Road", speed = c.speed, speed_locked = true,
-            ETA = 0, ETA_locked = false, task = emptyTask() },
-          { x = ex, y = ey, type = "Turning Point", action = "On Road", speed = c.speed, speed_locked = true,
-            ETA = 0, ETA_locked = false, task = emptyTask() } } } })
-        local g = Group.getByName(gname)
-        if g and g:isExist() then
-          pcall(function() g:getController():setOption(AI.Option.Ground.id.ROE, AI.Option.Ground.val.ROE.WEAPON_HOLD) end)
-          D.civils[#D.civils + 1] = { group = gname, dest = { x = ex, y = ey }, n = n, last = s0,
-            moved = timer.getTime(), expires = timer.getTime() + c.lifetime }
-          return true
-        end
-      end
-    end
-  end
-  return false
-end
-
 function D.chaosTick(now, players)
   local cc = D.cfg.chaos
   D.refreshBlueBases()
@@ -2741,28 +2680,6 @@ function D.chaosTick(now, players)
   if cc.helos.enabled and D.heloOn and #D.helos < cc.helos.maxActive and now >= D.nextHelo then
     D.nextHelo = now + randRange(cc.helos.interval)
     D.spawnHelo()
-  end
-  -- Zivilverkehr: Ankunft, Stillstand, Lebensdauer; zerstörte Fahrzeuge melden
-  for i = #D.civils, 1, -1 do
-    local v = D.civils[i]
-    local n = groupAliveCount(v.group)
-    if n < v.n then
-      local p = groupPos(v.group) or v.last
-      msg(string.format("%s: Civilian vehicle destroyed near %s – check your targets!", D.cfg.awacs.callsignName, bullseyeStr(p)))
-      v.n = n
-    end
-    local p = n > 0 and groupPos(v.group)
-    if p then
-      if dist(p, v.last) > 50 then v.last, v.moved = p, now end
-    end
-    if n == 0 or not p or dist(p, v.dest) < 300 or now - v.moved > 300 or now >= v.expires then
-      if n > 0 then destroyGroup(v.group) end
-      table.remove(D.civils, i)
-    end
-  end
-  if cc.civil.enabled and #D.civils < cc.civil.maxActive and now >= D.nextCivil then
-    D.nextCivil = now + randRange(cc.civil.interval)
-    D.spawnCivil()
   end
 end
 
@@ -5366,12 +5283,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.57 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.58 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.57 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.58 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
