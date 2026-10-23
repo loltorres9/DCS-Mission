@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.62 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.63 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -2250,7 +2250,19 @@ function D.spawnCAS(manual)
   return true
 end
 
-function D.requestCAS() D.spawnCAS(true) end
+-- Da alle CAS-Ziele einer AO schon beim Aktivieren erscheinen (cas.spawnAll), zeigt die Anforderung dann die vorhandenen Aufträge
+function D.requestCAS()
+  if #aoCandidates("casLeft") == 0 then
+    if #D.casTasks > 0 then
+      msg("CAS: All CAS targets of the active AOs are already assigned – current taskings follow.")
+      D.reportCAS()
+    else
+      msg("CAS: All CAS targets of the active AOs have been destroyed. New taskings come with the next AO.")
+    end
+    return
+  end
+  D.spawnCAS(true)
+end
 
 function D.reportCAS()
   if #D.casTasks == 0 then msg("CAS: No active taskings.") return end
@@ -5883,12 +5895,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.62 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.63 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.62 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.63 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
