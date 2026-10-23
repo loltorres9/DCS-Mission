@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.51 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.52 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -505,7 +505,8 @@ D.cfg = {
 
   cap = {
     enabled      = true,
-    maxActive    = 1,
+    maxActive    = 4,              -- gleichzeitig aktive feindliche CAP-Gruppen (auch mehrere vom selben Typ)
+    huntUpdate   = 30,             -- s: Jagd-CAP ("hunt") fliegt immer zum nächsten Spieler in der Luft, Kurs alle X s neu
     autoChance   = 0.0,            -- z.B. 0.3 = 30 % pro Intervall, 0 = nur per F10
     autoInterval = {900, 1800},
     difficulty   = 3,              -- 1 = nur Fox-2, 2 = frühe Fox-1, 3 = R-27 Fox-1, 4 = Fox-3
@@ -2076,11 +2077,48 @@ function D.currentCapTier()
   return math.max(1, math.min(#c.tiers, t))
 end
 
-function D.spawnCAP(tier)
+-- nächster Spieler in der Luft (Flugzeug/Hubschrauber) zu Punkt p
+local function nearestAirPlayer(p)
+  local best, bestD
+  for _, u in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+    if u and u:isExist() and u:inAir() then
+      local q = toV2(u:getPoint())
+      local d = dist(p, q)
+      if not bestD or d < bestD then best, bestD = q, d end
+    end
+  end
+  return best
+end
+
+-- Jagd-CAP: Route direkt zum nächsten Spieler in der Luft, Luftziele ohne Entfernungsgrenze bekämpfen
+function D.capHuntRoute(c)
+  local g = Group.getByName(c.group)
+  if not g or not g:isExist() then return end
+  local u = g:getUnit(1)
+  if not u or not u:isExist() then return end
+  local p = toV2(u:getPoint())
+  local tgt = nearestAirPlayer(p)
+  local cfg = D.cfg.cap
+  local tasks = { { number = 1, enabled = true, auto = false, id = "EngageTargets",
+                    params = { targetTypes = { "Air" }, priority = 0 } } }
+  local pts
+  if tgt then
+    pts = { airWP(p, cfg.alt, cfg.speed, tasks), airWP(tgt, cfg.alt, cfg.speed * 1.2, {}) }
+  else
+    tasks[2] = { number = 2, enabled = true, auto = false, id = "Orbit",
+                 params = { pattern = "Circle", point = p, speed = cfg.speed, altitude = cfg.alt } }
+    pts = { airWP(p, cfg.alt, cfg.speed, tasks) }
+  end
+  g:getController():setTask({ id = "Mission", params = { route = { points = pts } } })
+end
+
+-- mode: "patrol" (Racetrack in einer AO, bekämpft Luftziele bis 80 km) oder "hunt" (sucht den nächsten Spieler)
+function D.spawnCAP(tier, mode)
   local cfg = D.cfg.cap
   if not cfg.enabled then return end
+  mode = mode or "patrol"
   if #D.caps >= cfg.maxActive then
-    msg(D.cfg.awacs.callsignName .. ": Enemy CAP already airborne.")
+    msg(string.format("%s: Already %d enemy CAP groups airborne (maximum).", D.cfg.awacs.callsignName, #D.caps))
     return
   end
   local aos = aoCandidates(nil)
@@ -2148,12 +2186,21 @@ function D.spawnCAP(tier)
     end
   end, "CAP check"), nil, timer.getTime() + 5)
 
-  D.caps[#D.caps + 1] = { group = gname }
+  local c = { group = gname, hunt = (mode == "hunt"), nextHunt = timer.getTime() + 2 }
+  D.caps[#D.caps + 1] = c
   D.say({ "new_picture", tBE(best), tNum(cfg.size), "contacts", tAircraft(v.type),
           "angels", tNum(math.floor(cfg.alt * 3.28084 / 1000 + 0.5)), "hostile" })
-  msg(string.format("%s [%s]: New hostile group – %dx %s, %s, angels %d, approx. %s",
+  msg(string.format("%s [%s]: New hostile group – %dx %s, %s, angels %d, approx. %s – %s (%d/%d airborne)",
     D.cfg.awacs.callsignName, bestZone.name, cfg.size, v.type, td.label,
-    math.floor(cfg.alt * 3.28084 / 1000 + 0.5), bullseyeStr(best)))
+    math.floor(cfg.alt * 3.28084 / 1000 + 0.5), bullseyeStr(best),
+    c.hunt and "hunting the nearest aircraft" or "patrolling the AO", #D.caps, cfg.maxActive))
+end
+
+function D.removeCAPs()
+  if #D.caps == 0 then msg(D.cfg.awacs.callsignName .. ": No enemy CAP airborne.") return end
+  for _, c in ipairs(D.caps) do destroyGroup(c.group) end
+  msg(string.format("%s: %d enemy CAP group(s) removed.", D.cfg.awacs.callsignName, #D.caps))
+  D.caps = {}
 end
 
 -------------------------------------------------------------------------------
@@ -4147,7 +4194,12 @@ function D.update()
 
   -- CAP
   for i = #D.caps, 1, -1 do
-    if groupAliveCount(D.caps[i].group) == 0 then
+    local c = D.caps[i]
+    if c.hunt and groupAliveCount(c.group) > 0 and now >= (c.nextHunt or 0) then
+      c.nextHunt = now + D.cfg.cap.huntUpdate
+      D.capHuntRoute(c)
+    end
+    if groupAliveCount(c.group) == 0 then
       table.remove(D.caps, i)
       D.stats.cap = D.stats.cap + 1
       msg(D.cfg.awacs.callsignName .. ": Hostile CAP destroyed. Picture clean.")
@@ -4294,13 +4346,17 @@ function D.buildMenu()
 
   if D.cfg.cap.enabled then
     local capMenu = sub(root, "A2A: Request enemy CAP")
-    cmd(capMenu, "Current difficulty", function() D.spawnCAP() end)
-    for i, td in ipairs(D.cfg.cap.tiers) do
-      local types = {}
-      for _, v in ipairs(td.variants) do types[#types + 1] = v.type end
-      cmd(capMenu, string.format("Level %d – %s (%s)", i, td.label, table.concat(types, "/")),
-        function() D.spawnCAP(i) end)
+    for _, m in ipairs({ { "patrol", "Patrol the AO" }, { "hunt", "Hunt nearest player" } }) do
+      local mm = sub(capMenu, m[2])
+      cmd(mm, "Current difficulty", function() D.spawnCAP(nil, m[1]) end)
+      for i, td in ipairs(D.cfg.cap.tiers) do
+        local types = {}
+        for _, v in ipairs(td.variants) do types[#types + 1] = v.type end
+        cmd(mm, string.format("Level %d – %s (%s)", i, td.label, table.concat(types, "/")),
+          function() D.spawnCAP(i, m[1]) end)
+      end
     end
+    cmd(capMenu, "Remove all enemy CAPs", D.removeCAPs)
   end
 
   if D.cfg.ship.enabled then
@@ -4736,12 +4792,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.51 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.52 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.51 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.52 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
