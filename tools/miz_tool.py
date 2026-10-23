@@ -5,7 +5,8 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
   python tools/miz_tool.py info      MISSION.miz
   python tools/miz_tool.py embed     MISSION.miz src/DynSEAD.lua            [-o OUT.miz]
   python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [--keep] [-o OUT.miz]   (Caucasus, Syria)
-  python tools/miz_tool.py reroute   MISSION.miz [-o OUT.miz]   Wegpunkte aller Vorlagen: nächstgelegene Ziele je Startplatz
+  python tools/miz_tool.py reroute   MISSION.miz [-o OUT.miz]   Wegpunkte aller Vorlagen neu: eine gemeinsame Route über alle Ziele
+  python tools/miz_tool.py tplside   MISSION.miz neutral|blue [-o OUT.miz]   Vorlagen in neutrales Land (Schweiz) verschieben / zurück
   python tools/miz_tool.py options   MISSION.miz optionsView=optview_all --forced [-o OUT.miz]
   python tools/miz_tool.py voice     MISSION.miz overlord_voice.zip [--radio [1-3]] [-o OUT.miz]
 
@@ -57,11 +58,14 @@ class Miz:
 def theatre(miz):
     return miz.files.get("theatre", b"").decode().strip()
 
-def blue_groups(m):
-    for c in m["coalition"]["blue"]["country"].values():
-        for cat in ("plane", "helicopter"):
-            for g in c.get(cat, {}).get("group", {}).values():
-                yield c, cat, g
+def blue_groups(m, sides=("blue",)):
+    for side in sides:
+        for c in m["coalition"][side].get("country", {}).values():
+            for cat in ("plane", "helicopter"):
+                for g in c.get(cat, {}).get("group", {}).values():
+                    yield c, cat, g
+
+ALL_SIDES = ("blue", "red", "neutrals")         # Vorlagen können nach tplside neutral liegen
 
 def airfield_table(th):
     """{id: (name, x, y)} für die Karte; Caucasus aus Lat/Lon berechnet, Syria aus dem DCS-Log"""
@@ -77,12 +81,44 @@ def target_ids(th, table, home):
         return [i for i in table if i not in SYRIA_FRIENDLY]
     return [i for i in table if i not in home]
 
-def route_points(af, targets, table, wname, alt, alt_type, spd, maxwp):
-    """Wegpunkte 2..n: die maxwp Ziele, die dem Startplatz af am nächsten sind (aufsteigend nach Entfernung)"""
-    x0, y0 = table[af][1], table[af][2]
-    near = sorted((t for t in targets if t != af), key=lambda t: math.hypot(table[t][1] - x0, table[t][2] - y0))
+def global_route(th, table, targets, home):
+    """Eine gemeinsame Route über alle Ziele; wer weiter hinten startet, fliegt sie rückwärts.
+    Syria: Nord -> Süd in Bändern; sonst Kette nächster Nachbarn ab der Startbasis, danach 2-opt gegen Überkreuzungen."""
+    if th == "Syria":                            # zwei Fronten: streng Nord -> Süd in 50-km-Bändern, abwechselnd W->O / O->W
+        bands = {}
+        for t in targets: bands.setdefault(int(-table[t][1] // 50000), []).append(t)
+        route = []
+        for n, b in enumerate(sorted(bands)):
+            route += sorted(bands[b], key=lambda t: table[t][2], reverse=(n % 2 == 1))
+        return route
+    anchor = min(home) if home else min(table)
+    d = lambda a, b: math.hypot(table[a][1] - table[b][1], table[a][2] - table[b][2])
+    todo = set(targets); cur = anchor; route = []
+    while todo:
+        cur = min(todo, key=lambda t: d(cur, t)); route.append(cur); todo.remove(cur)
+    better = True
+    while better:                                # 2-opt für einen offenen Pfad (Anfang bleibt fest)
+        better = False
+        for i in range(0, len(route) - 2):
+            for j in range(i + 2, len(route)):
+                a, b = (anchor if i == 0 else route[i - 1]), route[i]
+                c = route[j]; e = route[j + 1] if j + 1 < len(route) else None
+                old = d(a, b) + (d(c, e) if e else 0)
+                new = d(a, c) + (d(b, e) if e else 0)
+                if new < old - 1:
+                    route[i:j + 1] = reversed(route[i:j + 1]); better = True
+    return route
+
+def thin(route, k):
+    """k Punkte gleichmäßig über die ganze Route verteilt (für Muster mit wenigen Wegpunkten)"""
+    if len(route) <= k: return list(route)
+    if k <= 1: return route[:k]
+    return [route[round(i * (len(route) - 1) / (k - 1))] for i in range(k)]
+
+def route_points(af, route, table, wname, alt, alt_type, spd, maxwp):
+    """Wegpunkte 2..n: die gemeinsame Route (ohne den eigenen Startplatz), bei zu wenig Speicher gleichmäßig ausgedünnt"""
     pts = {}
-    for n, t in enumerate(near[:maxwp], start=2):
+    for n, t in enumerate(thin([t for t in route if t != af], maxwp), start=2):
         pts[n] = {"alt": alt, "action": "Turning Point", "alt_type": alt_type, "speed": spd,
                   "task": {"id": "ComboTask", "params": {"tasks": {}}}, "type": "Turning Point",
                   "ETA": 0, "ETA_locked": False, "x": table[t][1], "y": table[t][2], "speed_locked": True,
@@ -120,7 +156,7 @@ def cmd_info(a):
                 if "linkDynTempl" in e: links.append(t)
         print("  %2d %-22s %-8s dyn=%s  Vorlagen: %s" % (i, name, ap.get("coalition"), ap.get("dynamicSpawn"), ", ".join(links) or "-"))
     n = sum(1 for _ in blue_groups(m))
-    print("\nBlaue Gruppen:", n, "(davon Vorlagen: %d)" % sum(1 for _, _, g in blue_groups(m) if g.get("dynSpawnTemplate")))
+    print("\nBlaue Gruppen:", n, "| Vorlagen (alle Seiten): %d" % sum(1 for _, _, g in blue_groups(m, ALL_SIDES) if g.get("dynSpawnTemplate")))
 
 # ----------------------------------------------------------------- embed
 def cmd_embed(a):
@@ -140,13 +176,18 @@ def cmd_embed(a):
     miz.save(a.out)
 
 # ----------------------------------------------------------------- templates
-TYPES = [  # typ, Kategorie, Gruppen-Task, Land(id,name), Höhe m, Höhentyp, Speed m/s, max. WP, Sprit kg, Label
-    ("F-16C_50",      "planes",      "CAP",           (2, "USA"),     7620, "BARO",  220.97, 20, 3104, "F-16"),
-    ("FA-18C_hornet", "planes",      "CAP",           (2, "USA"),     7620, "BARO",  220.97, 20, 4900, "F/A-18C"),
-    ("A-10C_2",       "planes",      "CAS",           (2, "USA"),     4572, "BARO",  150.0,  20, 5029, "A-10C II"),
-    ("AJS37",         "planes",      "Ground Attack", (46, "Sweden"), 3000, "BARO",  220.97,  9, 4476, "AJS-37"),
-    ("AH-64D_BLK_II", "helicopters", "CAS",           (2, "USA"),      150, "RADIO",  55.0,  10, 1438, "AH-64D"),
-    ("CH-47Fbl1",     "helicopters", "Transport",     (2, "USA"),      150, "RADIO",  60.0,  10, 3600, "CH-47F"),   # nur, wenn das Lager den Typ führt
+# Zielpunkte liegen auf Bodenhöhe (AGL 0, "RADIO"), damit Sensoren/Pod auf den Steuerpunkt schauen (Empfehlung F-16-Handbuch).
+# max. WP = Zielpunkte nach dem Startpunkt: F-16 volle Route auf Wunsch des Nutzers (Handbuch: ME-Wegpunkt 0 = Start,
+# 1..n = STPT 1..n; Navigationsbereich nur 1–25, dahinter Markpoints/Geo-Linien – Verhalten ab 26 im Spiel prüfen),
+# F/A-18 WP 0–59, Viggen B1–B9,
+# AH-64D W01–W50, CH-47F angenommen wie AH-64D; reicht der Speicher nicht, wird die Route gleichmäßig ausgedünnt
+TYPES = [  # typ, Kategorie, Gruppen-Task, Land(id,name), Zielpunkt-Höhe m, Höhentyp, Speed m/s, max. WP, Sprit kg, Label
+    ("F-16C_50",      "planes",      "CAP",           (2, "USA"),        0, "RADIO", 220.97, 99, 3104, "F-16"),
+    ("FA-18C_hornet", "planes",      "CAP",           (2, "USA"),        0, "RADIO", 220.97, 59, 4900, "F/A-18C"),
+    ("A-10C_2",       "planes",      "CAS",           (2, "USA"),        0, "RADIO", 150.0,  99, 5029, "A-10C II"),
+    ("AJS37",         "planes",      "Ground Attack", (46, "Sweden"),    0, "RADIO", 220.97,  9, 4476, "AJS-37"),
+    ("AH-64D_BLK_II", "helicopters", "CAS",           (2, "USA"),        0, "RADIO",  55.0,  49, 1438, "AH-64D"),
+    ("CH-47Fbl1",     "helicopters", "Transport",     (2, "USA"),        0, "RADIO",  60.0,  49, 3600, "CH-47F"),   # nur, wenn das Lager den Typ führt
 ]
 
 def cmd_templates(a):
@@ -162,6 +203,7 @@ def cmd_templates(a):
     order, pos = campaign_order(home, table)
     name = {i: v[0] for i, v in table.items()}
     targets = target_ids(theatre(miz), table, home)
+    route = global_route(theatre(miz), table, targets, home)
 
     # alte Vorlagen entfernen (alle blauen Gruppen mit dynSpawnTemplate); --keep: behalten, belegte Plätze überspringen
     for c in ([] if a.keep else m["coalition"]["blue"]["country"].values()):
@@ -173,8 +215,8 @@ def cmd_templates(a):
         for cat in ("planes", "helicopters"):
             for e in ap["aircrafts"][cat].values(): e.pop("linkDynTempl", None)
 
-    gid = max([g["groupId"] for _, _, g in blue_groups(m)] + [0])
-    uid = max([g["units"][1]["unitId"] for _, _, g in blue_groups(m)] + [0])
+    gid = max([g["groupId"] for _, _, g in blue_groups(m, ALL_SIDES)] + [0])
+    uid = max([g["units"][1]["unitId"] for _, _, g in blue_groups(m, ALL_SIDES)] + [0])
     stn = 0o200
     def wname(text):
         m["maxDictId"] += 1
@@ -214,7 +256,7 @@ def cmd_templates(a):
             sp["task"] = {"id": "ComboTask", "params": {"tasks": {}}}
             u.pop("parking", None); u.pop("parking_id", None)     # Editor vergibt Stellplatz beim Speichern
             pts = {1: sp}
-            pts.update(route_points(af, targets, table, wname, alt, alt_type, spd, maxwp))
+            pts.update(route_points(af, route, table, wname, alt, alt_type, spd, maxwp))
             g["route"] = {"points": pts}
             bucket[len(bucket) + 1] = g
             entry["linkDynTempl"] = gid
@@ -224,7 +266,7 @@ def cmd_templates(a):
     miz.save(a.out)
 
 def cmd_reroute(a):
-    """Wegpunkte aller vorhandenen Vorlagen neu setzen (nächstgelegene Ziele je Startplatz); Startpunkt/Parkplatz bleiben"""
+    """Wegpunkte aller vorhandenen Vorlagen neu setzen (gemeinsame Route über alle Ziele); Startpunkt/Parkplatz bleiben"""
     miz = Miz(a.miz)
     table = airfield_table(theatre(miz))
     if not table: sys.exit("Keine Flugplatztabelle (tools/geo.py) für Karte %s" % theatre(miz))
@@ -232,12 +274,13 @@ def cmd_reroute(a):
     dic = miz.table("l10n/DEFAULT/dictionary")
     home = [i for i, ap in w["airports"].items() if ap.get("coalition", "").upper() == "BLUE"]
     targets = target_ids(theatre(miz), table, home)
+    route = global_route(theatre(miz), table, targets, home)
     params = {t[0]: t for t in TYPES}
     def wname(text):
         m["maxDictId"] += 1
         k = "DictKey_WptName_%d" % m["maxDictId"]; dic[k] = text; return k
     n = 0
-    for _, _, g in blue_groups(m):
+    for _, _, g in blue_groups(m, ALL_SIDES):
         if not g.get("dynSpawnTemplate"): continue
         typ = g["units"][1]["type"]; sp = g["route"]["points"][1]; af = sp.get("airdromeId")
         if typ not in params or af not in table: continue
@@ -245,10 +288,41 @@ def cmd_reroute(a):
         for p in list(g["route"]["points"].values())[1:]:
             if isinstance(p.get("name"), str) and p["name"].startswith("DictKey_WptName_"): dic.pop(p["name"], None)
         pts = {1: sp}
-        pts.update(route_points(af, targets, table, wname, alt, alt_type, spd, maxwp))
+        pts.update(route_points(af, route, table, wname, alt, alt_type, spd, maxwp))
         g["route"]["points"] = pts
         n += 1
-    print("Wegpunkte neu gesetzt:", n, "Vorlagen")
+    print("Wegpunkte neu gesetzt:", n, "Vorlagen | Route (%d Ziele): %s" % (len(route), ", ".join(table[t][0] for t in route)))
+    miz.save(a.out)
+
+# ----------------------------------------------------------------- tplside
+NEUTRAL_TPL_COUNTRY = (22, "Switzerland")   # in beiden Missionen in der neutralen Koalition
+
+def cmd_tplside(a):
+    """Vorlagen (dynSpawnTemplate) in ein neutrales Land verschieben, damit sie nicht als Slots erscheinen – oder zurück nach blau"""
+    miz = Miz(a.miz)
+    m = miz.table("mission")
+    def country(side, cid, cname):
+        cs = m["coalition"][side].setdefault("country", {})
+        for c in cs.values():
+            if c["id"] == cid: return c
+        c = {"id": cid, "name": cname}; cs[len(cs) + 1] = c; return c
+    src_side, dst_side = ("blue", "neutrals") if a.side == "neutral" else ("neutrals", "blue")
+    blue_land = {t[0]: t[3] for t in TYPES}
+    moved = 0
+    for c in list(m["coalition"][src_side].get("country", {}).values()):
+        for cat in ("plane", "helicopter"):
+            grp = c.get(cat, {}).get("group", {})
+            keep, move = [], []
+            for g in grp.values():
+                (move if g.get("dynSpawnTemplate") else keep).append(g)
+            if not move: continue
+            c[cat]["group"] = {i + 1: g for i, g in enumerate(keep)}
+            for g in move:
+                cid, cname = NEUTRAL_TPL_COUNTRY if a.side == "neutral" else blue_land.get(g["units"][1]["type"], (2, "USA"))
+                dst = country(dst_side, cid, cname).setdefault(cat, {}).setdefault("group", {})
+                dst[len(dst) + 1] = g; moved += 1
+            if not keep: del c[cat]
+    print("Vorlagen verschoben nach %s: %d" % (dst_side, moved))
     miz.save(a.out)
 
 # ----------------------------------------------------------------- voice
@@ -362,6 +436,7 @@ if __name__ == "__main__":
     s.add_argument("--keep", action="store_true", help="vorhandene Vorlagen behalten, nur fehlende ergänzen")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
     s = sp.add_parser("reroute"); s.add_argument("miz"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_reroute)
+    s = sp.add_parser("tplside"); s.add_argument("miz"); s.add_argument("side", choices=["neutral", "blue"]); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_tplside)
     s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all; mit --forced entfernt KEY= den Eintrag"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
     s = sp.add_parser("voice");     s.add_argument("miz"); s.add_argument("clips", help="overlord_voice.zip oder Ordner")
     s.add_argument("--radio", nargs="?", type=int, const=2, default=0, choices=[0, 1, 2, 3], help="Funkfilter: 1 leicht, 2 normal (Standard bei --radio), 3 stark verzerrt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_voice)
