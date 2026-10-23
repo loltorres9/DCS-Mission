@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.59 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.60 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -552,6 +552,41 @@ D.cfg = {
     },
   },
 
+  -- Scud-Jagd: ein Scud-Werfer baut sich im Hinterland auf und feuert nach setupTime echte Raketen (FireAtPoint)
+  -- auf die nächste blaue Basis in Reichweite; Overlord meldet nur ein grobes Gebiet (Kreis auf der Karte)
+  scud = {
+    enabled       = true,
+    interval      = {1800, 3600},  -- s zwischen zwei Scud-Einsätzen (nach Ende des vorigen)
+    setupTime     = {1200, 1500},  -- s von der Meldung bis zum Feuerbefehl (dann noch Aufrichten des Werfers)
+    range         = {80000, 280000},  -- Entfernung zum Ziel (Scud-B: ca. 50–300 km)
+    areaRadius    = 37000,         -- Radius des gemeldeten Suchgebiets (20 NM); der Werfer liegt irgendwo darin
+    salvo         = 1,
+    impactRadius  = 300,
+    fireTimeout   = 480,           -- s nach Feuerbefehl ohne Abschuss-Ereignis -> Einschlag wird nachgestellt
+    fallbackPower = 800,           -- Sprengkraft des nachgestellten Einschlags
+    escort        = { "Ural-375", "UAZ-469" },
+    minBlueDist   = 60000,
+  },
+
+  -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
+  -- müssen per Hubschrauber abgeholt und zu einem eigenen Flugplatz/FARP gebracht werden; Feindfahrzeuge rücken an
+  csar = {
+    enabled       = true,
+    playerEject   = true,
+    allyInterval  = {2700, 5400},  -- s zwischen zufälligen Verbündeten-Abschüssen (0/nil = aus)
+    maxActive     = 2,
+    timeout       = 7200,          -- s; danach gilt ein nicht abgeholter Pilot als verloren
+    enemyGroups   = {1, 2},
+    enemySize     = {2, 3},
+    enemyTypes    = { "BTR-80", "UAZ-469", "BRDM-2" },
+    enemyDist     = {4000, 7000},  -- Startentfernung der anrückenden Feinde
+    enemySpeed    = 2.5,           -- m/s (ca. 30-45 min bis zum Piloten)
+    captureDist   = 150,
+    pickupDist    = 80,            -- gelandeter Hubschrauber so nah am Piloten -> an Bord
+    deliverDist   = 3000,          -- Landung so nah an einer blauen Basis/FARP -> gerettet
+    smokeDist     = 6000,          -- Hubschrauber in dieser Entfernung -> grüner Rauch (alle 5 min)
+  },
+
   cap = {
     enabled      = true,
     maxActive    = 4,              -- gleichzeitig aktive feindliche CAP-Gruppen (auch mehrere vom selben Typ)
@@ -679,7 +714,8 @@ D.capturedCount = 0
 D.counter       = 0
 D.markId        = 7000
 D.started       = false
-D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0, battle = 0 }
+D.stats         = { sam = 0, cas = 0, cap = 0, ship = 0, convoy = 0, deep = 0, tic = 0, bomber = 0, fortress = 0, battle = 0,
+                    scud = 0, csar = 0 }
 D.blueBases     = {}
 D.nextSam       = math.huge
 D.nextCas       = math.huge
@@ -2685,6 +2721,308 @@ function D.chaosTick(now, players)
 end
 
 -------------------------------------------------------------------------------
+-- SCUD-JAGD
+-------------------------------------------------------------------------------
+D.scud, D.nextScud = nil, 0
+
+local function clearMark(id) if id then trigger.action.removeMark(id) end end
+
+function D.spawnScud(force)
+  local c = D.cfg.scud
+  D.refreshBlueBases()
+  local anchors = redAirbases(c.minBlueDist)
+  if #anchors == 0 or #D.blueBases == 0 then return false end
+  for _ = 1, 80 do
+    local a = anchors[math.random(#anchors)]
+    local p = offset(a.p, math.random() * 2 * math.pi, randRange({5000, 30000}))
+    p = D.nearRoad(p) or p
+    local tgt = nearestBlueBase(p)
+    local d = tgt and dist(p, tgt)
+    if d and d >= c.range[1] and d <= c.range[2] and okGround(p) and D.ambushSpotOk(p) then
+      local gname = nextId("SCUD")
+      local hdg = math.atan2(tgt.y - p.y, tgt.x - p.x)
+      local units = { { name = gname .. "-1", type = "Scud_B", x = p.x, y = p.y, heading = hdg,
+                        skill = D.cfg.skill, playerCanDrive = false } }
+      for i, t in ipairs(c.escort) do
+        local o = offset(p, hdg + math.pi + (i - 1) * 0.6, 60)
+        units[#units + 1] = { name = gname .. "-" .. (i + 1), type = t, x = o.x, y = o.y, heading = hdg,
+                              skill = D.cfg.skill, playerCanDrive = false }
+      end
+      D.addGround(D.cfg.redCountry, { name = gname, task = "Ground Nothing", hidden = D.hideOnMap(), units = units })
+      local center = offset(p, math.random() * 2 * math.pi, math.random() * c.areaRadius * 0.7)
+      local mark = newMarkId()
+      trigger.action.circleToAll(D.cfg.blueSide, mark, toV3(center), c.areaRadius,
+        {1, 0.5, 0, 0.9}, {1, 0.5, 0, 0.06}, 2, true, "SCUD launch area")
+      local now = timer.getTime()
+      D.scud = { group = gname, pos = p, target = tgt, center = center, mark = mark,
+                 fireAt = now + randRange(c.setupTime), state = "setup" }
+      msg(string.format("%s: SCUD ALERT – intelligence reports a Scud launcher setting up within %d NM of %s (orange circle on the map). "
+        .. "Expected target: %s. Launch expected in about %d min – find and destroy it!",
+        D.cfg.awacs.callsignName, math.floor(c.areaRadius / 1852 + 0.5), bullseyeStr(center), tgt.name or "a friendly airfield",
+        math.floor((D.scud.fireAt - now) / 60 + 0.5)))
+      env.info("DynSEAD: Scud at " .. D.fmtPos(p))
+      if force then msg("DEBUG: Scud at " .. D.fmtPos(p)) end
+      return true
+    end
+  end
+  if force then msg("DEBUG: No valid Scud position found.") end
+  return false
+end
+
+function D.reportScud()
+  local sc = D.scud
+  if not sc or sc.state == "done" then msg("SCUD: No Scud activity reported.") return end
+  local left = math.max(0, math.floor((sc.fireAt - timer.getTime()) / 60 + 0.5))
+  msg(string.format("SCUD: Launcher within %d NM of %s, target %s. %s",
+    math.floor(D.cfg.scud.areaRadius / 1852 + 0.5), bullseyeStr(sc.center), sc.target.name or "friendly airfield",
+    sc.state == "setup" and string.format("Launch expected in about %d min.", left)
+      or (sc.state == "firing" and "Launcher erecting – launch imminent!" or "Missile launched.")))
+end
+
+function D.scudOnShot(e)
+  local sc = D.scud
+  if not sc or (sc.state ~= "firing" and sc.state ~= "setup") then return end
+  local ok, gname = pcall(function() return e.initiator:getGroup():getName() end)
+  if not ok or gname ~= sc.group then return end
+  sc.state, sc.launchedAt = "launched", timer.getTime()
+  local t = dist(sc.pos, sc.target) / 1100
+  msg(string.format("%s: SCUD LAUNCH! Missile inbound to %s – impact in about %d min. Take cover!",
+    D.cfg.awacs.callsignName, sc.target.name or "a friendly airfield", math.max(1, math.floor(t / 60 + 0.5))))
+end
+
+function D.scudTick(now)
+  local c = D.cfg.scud
+  local sc = D.scud
+  if not sc then
+    if now >= D.nextScud then
+      if D.nextScud == 0 then D.nextScud = now + randRange(c.interval) return end
+      D.nextScud = now + 300
+      D.spawnScud()
+    end
+    return
+  end
+  local alive = unitAlive(sc.group .. "-1")
+  if (sc.state == "setup" or sc.state == "firing") and not alive then
+    D.stats.scud = D.stats.scud + 1
+    msg(string.format("%s: Scud launcher destroyed – launch prevented! Good work. (%d total)", D.cfg.awacs.callsignName, D.stats.scud))
+    sc.state, sc.endAt = "done", now + 300
+  elseif sc.state == "setup" then
+    if not sc.warned and now >= sc.fireAt - 300 then
+      sc.warned = true
+      msg(D.cfg.awacs.callsignName .. ": Scud launch expected within 5 minutes!")
+    end
+    if now >= sc.fireAt then
+      local g = Group.getByName(sc.group)
+      if g and g:isExist() then
+        local ctl = g:getController()
+        pcall(function() ctl:setOption(AI.Option.Ground.id.ALARM_STATE, AI.Option.Ground.val.ALARM_STATE.RED) end)
+        ctl:setTask({ id = "FireAtPoint", params = { point = { x = sc.target.x, y = sc.target.y },
+          radius = c.impactRadius, expendQty = c.salvo, expendQtyEnabled = true } })
+      end
+      sc.state, sc.firedAt = "firing", now
+      msg(D.cfg.awacs.callsignName .. ": Scud launcher is erecting – launch imminent!")
+    end
+  elseif sc.state == "firing" and now - sc.firedAt > c.fireTimeout then
+    -- kein Abschuss-Ereignis: Einschlag nachstellen
+    local t = dist(sc.pos, sc.target) / 1100
+    msg(string.format("%s: SCUD LAUNCH! Missile inbound to %s – impact in about %d min. Take cover!",
+      D.cfg.awacs.callsignName, sc.target.name or "a friendly airfield", math.max(1, math.floor(t / 60 + 0.5))))
+    local tp = toV3(offset(sc.target, math.random() * 2 * math.pi, math.random() * c.impactRadius))
+    timer.scheduleFunction(function() trigger.action.explosion(tp, c.fallbackPower) end, nil, now + t)
+    env.info("DynSEAD: Scud fired no weapon – impact simulated")
+    sc.state, sc.launchedAt = "launched", now
+  elseif sc.state == "launched" then
+    sc.state, sc.endAt = "done", now + 600
+  elseif sc.state == "done" and now >= sc.endAt then
+    destroyGroup(sc.group)
+    clearMark(sc.mark)
+    D.scud = nil
+    D.nextScud = now + randRange(c.interval)
+  end
+end
+
+-------------------------------------------------------------------------------
+-- CSAR
+-------------------------------------------------------------------------------
+D.csars, D.nextCsar = {}, 0
+
+-- Pilot am Boden bei p (name = Rufname für die Meldungen)
+function D.spawnCsar(p, name, force)
+  local c = D.cfg.csar
+  if #D.csars >= c.maxActive and not force then return false end
+  if not okGround(p) then return false end
+  local gname = nextId("CSAR")
+  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = {
+    { name = gname .. "-1", type = "Soldier M4", x = p.x, y = p.y, heading = 0, skill = "Average", playerCanDrive = false } } })
+  local cs = { group = gname, pos = p, name = name, enemies = {}, spawned = timer.getTime(), nextSmoke = 0 }
+  for _ = 1, math.random(c.enemyGroups[1], c.enemyGroups[2]) do
+    local ep = offset(p, math.random() * 2 * math.pi, randRange(c.enemyDist))
+    if okGround(ep) then
+      local en = nextId("CSARE")
+      groundGroup(D.cfg.redCountry, en, c.enemyTypes, math.random(c.enemySize[1], c.enemySize[2]), ep,
+        math.atan2(p.y - ep.y, p.x - ep.x), 30, D.hideOnMap())
+      cs.enemies[#cs.enemies + 1] = en
+      timer.scheduleFunction(safe(function() moveTo(en, p, c.enemySpeed, false) end, "CSAR"), nil, timer.getTime() + 2)
+    end
+  end
+  cs.mark = newMarkId()
+  trigger.action.markToCoalition(cs.mark, "CSAR: downed pilot " .. name .. "\n" .. D.fmtPos(p), toV3(p), D.cfg.blueSide, true)
+  D.csars[#D.csars + 1] = cs
+  msg(string.format("%s: CSAR – %s is down at %s. Enemy forces are closing in. "
+    .. "Land a helicopter next to the pilot and fly them to a friendly airfield or FARP. Jets: keep the enemy away!",
+    D.cfg.awacs.callsignName, name, D.fmtPos(p)))
+  return true
+end
+
+-- zufälliger Verbündeter: nahe dem Rand einer aktiven AO auf der eigenen Seite
+function D.spawnAllyCsar(force)
+  local aos = aoCandidates(nil)
+  if #aos == 0 then return false end
+  D.refreshBlueBases()
+  for _ = 1, 40 do
+    local ao = aos[math.random(#aos)]
+    local c0 = { x = ao.x, y = ao.y }
+    local b = nearestBlueBase(c0)
+    local hdg = b and math.atan2(b.y - c0.y, b.x - c0.x) or math.random() * 2 * math.pi
+    local p = offset(c0, hdg + (math.random() - 0.5) * 2, ao.radius + randRange({-10000, 10000}))
+    if okGround(p) and enemyGround(p, 15000) then
+      local cs = { "Viper", "Hawg", "Hornet", "Jedi", "Dude", "Pontiac" }
+      return D.spawnCsar(p, string.format("%s %d-%d", cs[math.random(#cs)], math.random(1, 9), math.random(1, 4)), force)
+    end
+  end
+  return false
+end
+
+function D.csarOnEject(e)
+  local c = D.cfg.csar
+  if not c.enabled or not c.playerEject then return end
+  local u = e.initiator
+  local ok, info = pcall(function()
+    return { side = u:getCoalition(), player = u:getPlayerName(), p = toV2(u:getPoint()) }
+  end)
+  if not ok or not info or info.side ~= D.cfg.blueSide or not info.player then return end
+  D.refreshBlueBases()
+  if not enemyGround(info.p, 10000) then return end
+  local p = offset(info.p, math.random() * 2 * math.pi, math.random() * 300)
+  timer.scheduleFunction(safe(function() D.spawnCsar(p, info.player, true) end, "CSAR"), nil, timer.getTime() + 60)
+end
+
+local function blueHelos()
+  local out = {}
+  for _, u in ipairs(coalition.getPlayers(D.cfg.blueSide) or {}) do
+    local ok, cat = pcall(function() return u:getDesc().category end)
+    if ok and cat == Unit.Category.HELICOPTER and u:isExist() then out[#out + 1] = u end
+  end
+  return out
+end
+
+local function endCsar(cs, i, now)
+  clearMark(cs.mark)
+  destroyGroup(cs.group)
+  local en = cs.enemies
+  timer.scheduleFunction(function() for _, n in ipairs(en) do destroyGroup(n) end end, nil, now + 300)
+  table.remove(D.csars, i)
+end
+
+function D.csarTick(now)
+  local c = D.cfg.csar
+  for i = #D.csars, 1, -1 do
+    local cs = D.csars[i]
+    if cs.carrier then
+      local u = Unit.getByName(cs.carrier)
+      if not u or not u:isExist() then
+        msg(string.format("%s: Contact lost with the helicopter carrying %s – rescue failed.", D.cfg.awacs.callsignName, cs.name))
+        endCsar(cs, i, now)
+      elseif not u:inAir() then
+        local p = toV2(u:getPoint())
+        local home = not farFrom(p, D.blueBases, c.deliverDist)
+        for _, f in ipairs(D.farps or {}) do if dist(p, f.pos) < c.deliverDist then home = true end end
+        if home then
+          D.stats.csar = D.stats.csar + 1
+          msg(string.format("%s: %s delivered safely – CSAR complete! (%d total)", D.cfg.awacs.callsignName, cs.name, D.stats.csar))
+          endCsar(cs, i, now)
+        end
+      end
+    else
+      local pp = groupPos(cs.group)
+      if not pp then
+        msg(string.format("%s: %s is KIA – CSAR failed.", D.cfg.awacs.callsignName, cs.name))
+        endCsar(cs, i, now)
+      else
+        local captured = false
+        for _, en in ipairs(cs.enemies) do
+          local g = Group.getByName(en)
+          for _, eu in ipairs((g and g:isExist() and g:getUnits()) or {}) do
+            if eu:isExist() and eu:getLife() >= 1 and dist(toV2(eu:getPoint()), pp) < c.captureDist then captured = true end
+          end
+        end
+        if captured then
+          msg(string.format("%s: %s has been captured by enemy forces – CSAR failed.", D.cfg.awacs.callsignName, cs.name))
+          endCsar(cs, i, now)
+        elseif now - cs.spawned > c.timeout then
+          msg(string.format("%s: No more contact with %s – CSAR failed.", D.cfg.awacs.callsignName, cs.name))
+          endCsar(cs, i, now)
+        else
+          for _, h in ipairs(blueHelos()) do
+            local hp = toV2(h:getPoint())
+            local d = dist(hp, pp)
+            if d < c.smokeDist and now >= cs.nextSmoke then
+              trigger.action.smoke(toV3(pp), trigger.smokeColor.Green)
+              cs.nextSmoke = now + 300
+            end
+            if d < c.pickupDist and not h:inAir() then
+              cs.carrier = h:getName()
+              destroyGroup(cs.group)
+              clearMark(cs.mark)
+              cs.mark = nil
+              msg(string.format("%s: %s is aboard %s! Fly them to any friendly airfield or FARP.",
+                D.cfg.awacs.callsignName, cs.name, h:getPlayerName() or h:getName()))
+              break
+            end
+          end
+        end
+      end
+    end
+  end
+  if c.allyInterval and c.allyInterval[1] and c.allyInterval[1] > 0 then
+    if D.nextCsar == 0 then D.nextCsar = now + randRange(c.allyInterval) end
+    if now >= D.nextCsar then
+      D.nextCsar = now + randRange(c.allyInterval)
+      if #D.csars < c.maxActive then D.spawnAllyCsar() end
+    end
+  end
+end
+
+function D.reportCsar()
+  if #D.csars == 0 then msg("CSAR: No downed pilots.") return end
+  local lines = { "CSAR:" }
+  for _, cs in ipairs(D.csars) do
+    if cs.carrier then
+      lines[#lines + 1] = string.format("• %s – aboard %s, return to base", cs.name, cs.carrier)
+    else
+      local pp = groupPos(cs.group) or cs.pos
+      local nearest
+      for _, en in ipairs(cs.enemies) do
+        local ep = groupPos(en)
+        if ep then nearest = math.min(nearest or math.huge, dist(ep, pp)) end
+      end
+      lines[#lines + 1] = string.format("• %s at %s\n   enemy forces: %s", cs.name, D.fmtPos(pp),
+        nearest and string.format("%.1f km away", nearest / 1000) or "none")
+    end
+  end
+  msg(table.concat(lines, "\n"))
+end
+
+function D.smokeCsar()
+  local n = 0
+  for _, cs in ipairs(D.csars) do
+    local pp = not cs.carrier and groupPos(cs.group)
+    if pp then trigger.action.smoke(toV3(pp), trigger.smokeColor.Green); n = n + 1 end
+  end
+  msg(n > 0 and "CSAR: Downed pilots popping green smoke." or "CSAR: No pilot on the ground.")
+end
+
+-------------------------------------------------------------------------------
 -- SCHIFFSZIELE (Ship Strike)
 -------------------------------------------------------------------------------
 local function isSea(p)
@@ -4608,8 +4946,9 @@ function D.reportCampaign()
 end
 
 function D.reportStats()
-  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nFrontline battles won: %d\nBombers intercepted: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
-    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.battle, D.stats.bomber, D.stats.fortress, D.stats.cap, D.capturedCount))
+  msg(string.format("STATISTICS:\nSAM sites: %d\nCAS taskings: %d\nShip strikes: %d\nConvoys stopped: %d\nDeep strikes: %d\nTroops in contact: %d\nFrontline battles won: %d\nBombers intercepted: %d\nScud launchers destroyed: %d\nPilots rescued: %d\nMain bases neutralized: %d\nEnemy CAPs: %d\nAirfields: %d",
+    D.stats.sam, D.stats.cas, D.stats.ship, D.stats.convoy, D.stats.deep, D.stats.tic, D.stats.battle, D.stats.bomber,
+    D.stats.scud or 0, D.stats.csar or 0, D.stats.fortress, D.stats.cap, D.capturedCount))
 end
 
 -------------------------------------------------------------------------------
@@ -4677,6 +5016,8 @@ function D.update()
   D.battleTick(now)
   D.ambushTick(now, players)
   D.chaosTick(now, players)
+  if D.cfg.scud.enabled then D.scudTick(now) end
+  if D.cfg.csar.enabled then D.csarTick(now) end
   D.bomberTick(now)
   D.fortressTick(now)
 
@@ -4861,16 +5202,25 @@ function D.buildMenu()
 
   local sq = sub(root, "Side Missions")
   if D.cfg.convoy.enabled then
-    cmd(sq, "Convoy: Request intercept tasking", D.requestConvoy)
-    cmd(sq, "Convoy: Status and route", D.reportConvoy)
+    local cm = sub(sq, "Convoy")
+    cmd(cm, "Request intercept tasking", D.requestConvoy)
+    cmd(cm, "Status and route", D.reportConvoy)
   end
   if D.cfg.deepStrike.enabled then
-    cmd(sq, "Deep Strike: Request tasking", D.requestDeepStrike)
-    cmd(sq, "Deep Strike: Status", D.reportDeepStrike)
+    local dm = sub(sq, "Deep Strike")
+    cmd(dm, "Request tasking", D.requestDeepStrike)
+    cmd(dm, "Status", D.reportDeepStrike)
   end
   if D.cfg.bomber.enabled then
-    cmd(sq, "Bomber: Request intercept tasking", D.requestBomber)
-    cmd(sq, "Bomber: Status", D.reportBomber)
+    local bo = sub(sq, "Bomber Intercept")
+    cmd(bo, "Request intercept tasking", D.requestBomber)
+    cmd(bo, "Status", D.reportBomber)
+  end
+  if D.cfg.scud.enabled then cmd(sq, "SCUD hunt: status", D.reportScud) end
+  if D.cfg.csar.enabled then
+    local cm = sub(sq, "CSAR")
+    cmd(cm, "Status and positions", D.reportCsar)
+    cmd(cm, "Downed pilots: green smoke", D.smokeCsar)
   end
   if D.cfg.battle.enabled then
     local bm = sub(sq, "Frontline Battle")
@@ -4896,6 +5246,13 @@ function D.buildMenu()
     if D.cfg.fortress.enabled then cmd(dbg, "Activate enemy main base now", function() D.activateFortress(true) end) end
     cmd(dbg, "Write airfield list to dcs.log", D.debugListAirbases)
     if D.cfg.ambush.enabled then cmd(dbg, "Spawn SAM ambush now", function() D.spawnAmbush(true) end) end
+    if D.cfg.scud.enabled then cmd(dbg, "Spawn Scud now (fires in 3 min)", function()
+      if D.scud then msg("DEBUG: Scud already active.") return end
+      if D.spawnScud(true) then D.scud.fireAt = timer.getTime() + 180 end
+    end) end
+    if D.cfg.csar.enabled then cmd(dbg, "Spawn CSAR now", function()
+      if not D.spawnAllyCsar(true) then msg("DEBUG: No valid CSAR position found.") end
+    end) end
   end
 end
 
@@ -5158,6 +5515,9 @@ function D.handler:onEvent(e)
       end
     elseif e.id == world.event.S_EVENT_SHOT then
       onShot(e)
+      if D.cfg.scud.enabled then D.scudOnShot(e) end
+    elseif e.id == world.event.S_EVENT_EJECTION then
+      D.csarOnEject(e)
     elseif e.id == world.event.S_EVENT_MARK_ADDED or e.id == world.event.S_EVENT_MARK_CHANGE then
       D.onMarkText(e)
     end
@@ -5284,12 +5644,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.59 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.60 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.59 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.60 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
