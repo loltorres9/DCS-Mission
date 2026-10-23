@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.61 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.62 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -574,8 +574,9 @@ D.cfg = {
     enabled       = true,
     autoInterval  = {3600, 5400},  -- s zwischen automatischen Eskortaufträgen (0/nil = nur per F10)
     type          = "C-130",
-    alt           = 6000,          -- m
-    speed         = 140,           -- m/s
+    alt           = 6096,          -- m (20 000 ft); Reiseflug bis kurz vor dem Ziel
+    speed         = 170,           -- m/s (≈ 330 kn, so schnell wie möglich – die KI begrenzt auf die Höchstgeschwindigkeit)
+    descentDist   = 40000,         -- m vor dem Ziel beginnt der Sinkflug (vorher bleibt sie oben)
     minRoute      = 120000,        -- Mindeststrecke; sonst Start in der Luft weiter hinten
     holdTime      = 900,           -- s am Treffpunkt warten, bis ein Spieler-Jet näher als joinDist ist
     joinDist      = 18500,         -- 10 NM
@@ -2820,10 +2821,22 @@ local function escortDepart(es)
   local g = Group.getByName(es.group)
   if not g or not g:isExist() then return end
   local p = groupPos(es.group) or es.start
+  -- Reiseflug-Wegpunkte auf voller Höhe, sonst sinkt die KI schon ab dem Start Richtung Landewegpunkt
+  local pts = { airWP(p, c.alt, c.speed, {}) }
+  local total = dist(p, es.dest)
+  local hdg = math.atan2(es.dest.y - p.y, es.dest.x - p.x)
+  for _, f in ipairs({ 0.33, 0.66 }) do
+    local q = offset(p, hdg, total * f)
+    if dist(q, es.dest) > c.descentDist then pts[#pts + 1] = airWP(q, c.alt, c.speed, {}) end
+  end
+  if total > c.descentDist then
+    pts[#pts + 1] = airWP(offset(es.dest, hdg + math.pi, c.descentDist), c.alt, c.speed, {})
+  end
   local lwp = { x = es.dest.x, y = es.dest.y, alt = 0, alt_type = "RADIO", type = "Land", action = "Landing",
                 airdromeId = es.destAb:getID(), speed = 80, speed_locked = true, ETA = 0, ETA_locked = false,
                 task = { id = "ComboTask", params = { tasks = {} } } }
-  g:getController():setTask({ id = "Mission", params = { route = { points = { airWP(p, c.alt, c.speed, {}), lwp } } } })
+  pts[#pts + 1] = lwp
+  g:getController():setTask({ id = "Mission", params = { route = { points = pts } } })
 end
 
 -- Abfangjäger: kommen aus Richtung Feindgebiet und jagen die C-130 (Route alle huntUpdate s neu)
@@ -5870,12 +5883,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.61 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.62 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.61 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.62 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
