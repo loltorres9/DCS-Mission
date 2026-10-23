@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.63 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.64 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -577,12 +577,16 @@ D.cfg = {
     alt           = 6096,          -- m (20 000 ft); Reiseflug bis kurz vor dem Ziel
     speed         = 170,           -- m/s (≈ 330 kn, so schnell wie möglich – die KI begrenzt auf die Höchstgeschwindigkeit)
     descentDist   = 40000,         -- m vor dem Ziel beginnt der Sinkflug (vorher bleibt sie oben)
-    minRoute      = 120000,        -- Mindeststrecke; sonst Start in der Luft weiter hinten
+    minRoute      = 100000,        -- Startplatz: eigener Platz 100–220 km vom Ziel (möglichst nah an prefRoute),
+    maxRoute      = 220000,        -- damit die C-130 nicht am anderen Ende der Karte startet
+    prefRoute     = 150000,        -- sonst Start in der Luft prefRoute hinter dem Ziel (weg von der Front)
     holdTime      = 900,           -- s am Treffpunkt warten, bis ein Spieler-Jet näher als joinDist ist
     joinDist      = 18500,         -- 10 NM
-    waves         = { 0.3, 0.65 }, -- Abfangwellen bei diesem Anteil der Strecke (zweite nur ab longRoute)
-    longRoute     = 200000,
-    interceptDist = 90000,         -- Abfangjäger erscheinen so weit von der C-130 entfernt, Richtung Feindgebiet
+    waves         = { 0.0, 0.5 },  -- Abfangwellen bei diesem Anteil der Strecke (0 = beim Abflug; zweite nur ab longRoute)
+    longRoute     = 180000,
+    interceptBase = { 40000, 300000 },  -- Abfangjäger starten von der Startbahn des roten Platzes, der der Reststrecke am
+                                        -- nächsten ist (mind. 40 km von blauen Basen, max. 300 km von der C-130)
+    interceptDist = 90000,         -- nur falls kein Platz passt: Luftstart so weit von der C-130 Richtung Feindgebiet
     huntUpdate    = 30,
   },
 
@@ -2781,7 +2785,9 @@ function D.requestEscort()
     if not dest or frontDist(b) < frontDist(dest) then dest = b end
   end
   for _, b in ipairs(D.blueBases) do
-    if b ~= dest and dist(b, dest) >= c.minRoute and (not origin or dist(b, dest) > dist(origin, dest)) then origin = b end
+    local d = dist(b, dest)
+    if b ~= dest and d >= c.minRoute and d <= c.maxRoute
+       and (not origin or math.abs(d - c.prefRoute) < math.abs(dist(origin, dest) - c.prefRoute)) then origin = b end
   end
   local destAb
   for _, ab in ipairs(world.getAirbases() or {}) do
@@ -2799,7 +2805,7 @@ function D.requestEscort()
       for _, a in ipairs(aos) do if dist(dest, { x = a.x, y = a.y }) < dist(dest, { x = ao.x, y = ao.y }) then ao = a end end
       away = math.atan2(dest.y - ao.y, dest.x - ao.x)
     end
-    start = offset(dest, away, c.minRoute)
+    start = offset(dest, away, c.prefRoute)
   end
   local gname = nextId("ESC")
   local hdg = math.atan2(dest.y - start.y, dest.x - start.x)
@@ -2852,35 +2858,72 @@ local function escortDepart(es)
 end
 
 -- Abfangjäger: kommen aus Richtung Feindgebiet und jagen die C-130 (Route alle huntUpdate s neu)
+-- Abfangjäger: starten von der Startbahn des roten Platzes, der der Reststrecke der C-130 am nächsten ist
+-- (Luftstart nur, wenn kein Platz passt) und jagen die C-130 (Route alle huntUpdate s neu, sobald in der Luft)
 local function escortIntercept(es, cp)
   local c, cap = D.cfg.escort, D.cfg.cap
-  local enemy
-  for _, a in ipairs(redAirbases(0)) do
-    if not enemy or dist(a.p, cp) < dist(enemy, cp) then enemy = a.p end
+  local mid = { x = (cp.x + es.dest.x) / 2, y = (cp.y + es.dest.y) / 2 }
+  local base
+  for _, a in ipairs(redAirbases(c.interceptBase[1])) do
+    if dist(a.p, cp) <= c.interceptBase[2] and (not base or dist(a.p, mid) < dist(base.p, mid)) then base = a end
   end
-  local dir = enemy and math.atan2(enemy.y - cp.y, enemy.x - cp.x) or math.random() * 2 * math.pi
-  local sp = offset(cp, dir, c.interceptDist)
   local td = cap.tiers[D.currentCapTier()]
   local v = td.variants[math.random(#td.variants)]
   local lo = D.capLoadouts[v.loadout]
-  local gname = nextId("INT")
-  local units = {}
-  for i = 1, cap.size do
-    units[i] = { name = gname .. "-" .. i, type = v.type, x = sp.x - 300 * (i - 1), y = sp.y + 300 * (i - 1),
-      alt = cap.alt, alt_type = "BARO", speed = cap.speed, heading = dir + math.pi, skill = td.skill or D.cfg.skill,
-      payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil }
-  end
   local tasks = { { number = 1, enabled = true, auto = false, id = "EngageTargets",
                     params = { targetTypes = { "Air" }, priority = 0 } } }
-  coalition.addGroup(D.cfg.redCountry, Group.Category.AIRPLANE, {
-    name = gname, task = "CAP", uncontrolled = false, units = units,
-    route = { points = { airWP(sp, cap.alt, cap.speed, tasks), airWP(cp, cap.alt, cap.speed * 1.2, {}) } },
-  })
+  local function build(ground)
+    local gname = nextId("INT")
+    local sp, dir
+    if ground then
+      sp, dir = base.p, math.atan2(cp.y - base.p.y, cp.x - base.p.x)
+    else
+      local enemy
+      for _, a in ipairs(redAirbases(0)) do
+        if not enemy or dist(a.p, cp) < dist(enemy, cp) then enemy = a.p end
+      end
+      dir = enemy and math.atan2(enemy.y - cp.y, enemy.x - cp.x) or math.random() * 2 * math.pi
+      sp = offset(cp, dir, c.interceptDist)
+      dir = dir + math.pi
+    end
+    local units = {}
+    for i = 1, cap.size do
+      units[i] = { name = gname .. "-" .. i, type = v.type,
+        x = sp.x - (ground and 30 or 300) * (i - 1), y = sp.y + (ground and 30 or 300) * (i - 1),
+        alt = ground and land.getHeight(sp) or cap.alt, alt_type = "BARO", speed = ground and 0 or cap.speed,
+        heading = dir, skill = td.skill or D.cfg.skill,
+        payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil }
+    end
+    local first
+    if ground then
+      first = { x = sp.x, y = sp.y, alt = land.getHeight(sp), alt_type = "BARO", type = "TakeOff", action = "From Runway",
+        airdromeId = base.ab:getID(), speed = 0, speed_locked = true, ETA = 0, ETA_locked = false,
+        task = { id = "ComboTask", params = { tasks = {} } } }
+    else
+      first = airWP(sp, cap.alt, cap.speed, tasks)
+    end
+    coalition.addGroup(D.cfg.redCountry, Group.Category.AIRPLANE, {
+      name = gname, task = "CAP", uncontrolled = false, units = units,
+      route = { points = { first, airWP(cp, cap.alt, cap.speed * 1.2, tasks) } },
+    })
+    local g = Group.getByName(gname)
+    return (g and g:isExist()) and gname or nil, sp
+  end
+  local ground = base ~= nil
+  local gname, sp
+  if ground then gname, sp = build(true) end
+  if not gname then ground = false; gname, sp = build(false) end
+  if not gname then return end
   es.interceptors[#es.interceptors + 1] = gname
-  msg(string.format("%s: Hostile interceptors – %dx %s – launched toward %s from %s, %s!",
-    D.cfg.awacs.callsignName, cap.size, v.type, es.callsign,
-    string.format("%03d°", math.floor((math.deg(math.atan2(sp.y - cp.y, sp.x - cp.x)) + 360) % 360 + 0.5)),
-    string.format("%d NM", math.floor(c.interceptDist / 1852 + 0.5))))
+  if ground then
+    msg(string.format("%s: Hostile interceptors – %dx %s – scrambling from %s toward %s!",
+      D.cfg.awacs.callsignName, cap.size, v.type, base.ab:getName(), es.callsign))
+  else
+    msg(string.format("%s: Hostile interceptors – %dx %s – inbound to %s from %03d°, %d NM!",
+      D.cfg.awacs.callsignName, cap.size, v.type, es.callsign,
+      math.floor((math.deg(math.atan2(sp.y - cp.y, sp.x - cp.x)) + 360) % 360 + 0.5),
+      math.floor(dist(sp, cp) / 1852 + 0.5)))
+  end
 end
 
 function D.reportEscort()
@@ -2948,7 +2991,9 @@ function D.escortTick(now)
       for _, n in ipairs(es.interceptors) do
         local g = Group.getByName(n)
         local ip = groupPos(n)
-        if g and g:isExist() and ip then
+        local up = false
+        for _, iu in ipairs((g and g:isExist() and g:getUnits()) or {}) do if iu:isExist() and iu:inAir() then up = true end end
+        if up and ip then   -- erst nach dem Start umleiten, sonst bricht die KI den Start ab
           g:getController():setTask({ id = "Mission", params = { route = { points = {
             airWP(ip, D.cfg.cap.alt, D.cfg.cap.speed, { { number = 1, enabled = true, auto = false, id = "EngageTargets",
               params = { targetTypes = { "Air" }, priority = 0 } } }),
@@ -5895,12 +5940,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.63 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.64 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.63 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.64 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
