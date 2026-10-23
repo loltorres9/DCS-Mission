@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.49 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.50 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -150,24 +150,26 @@ D.cfg = {
       vanilla       = false,       -- DCS-eigenes "Evasion of ARM" zusätzlich aktivieren
       -- Entdeckung der anfliegenden ARM durch das Radar der Stellung:
       -- Chance pro Sekunde, solange die ARM in Reichweite UND Sichtlinie ist (bei Referenzhöhe)
-      detectRate      = { SA2 = 0.02, SA3 = 0.02, SA6 = 0.03, SA11 = 0.04, SA8 = 0.04, SA15 = 0.06, SA5 = 0.03, SA10 = 0.06 },
-      defaultRate     = 0.03,
+      -- v4.50 deutlich gesenkt (vorher 0.02–0.06): Crews erkennen eine ARM grob nur noch in 25–50 % der Fälle
+      detectRate      = { SA2 = 0.005, SA3 = 0.005, SA6 = 0.007, SA11 = 0.008, SA8 = 0.008, SA15 = 0.012, SA5 = 0.006, SA10 = 0.012 },
+      defaultRate     = 0.007,
       detectRange     = { SA2 = 40000, SA3 = 30000, SA6 = 30000, SA11 = 40000, SA8 = 20000, SA15 = 25000, SA5 = 50000, SA10 = 60000 },
       defaultRange    = 30000,
       altRef          = 3000,        -- m über Grund, bei der Höhenfaktor 1 gilt
       altFactor       = {0.2, 1.5},  -- tief anfliegend = schwer zu sehen, hoch = leicht
       reactionDelay   = {4, 10},     -- s von Entdeckung bis Radar aus
-      launchAlert     = 0.5,         -- Chance, dass der Start selbst bemerkt wird (Shooter im Radar)
-      alertMultiplier = 3,           -- dann ist die Crew aufmerksamer
-      recover       = {120, 300},  -- Radar bleibt nach Einschlag/Vorbeiflug X s unterdrückt
+      launchAlert     = 0.3,         -- Chance, dass der Start selbst bemerkt wird (Shooter im Radar)
+      alertMultiplier = 2,           -- dann ist die Crew aufmerksamer
+      maxEvasions     = 2,           -- danach weicht die Stellung keiner ARM mehr aus (Crew bleibt auf Sendung)
+      recover       = {40, 90},    -- Radar bleibt nach Einschlag/Vorbeiflug X s unterdrückt (vorher 120–300)
       maxAngle      = 20,          -- Grad: Zielzuordnung über Flugrichtung, falls kein direktes Ziel
     },
     relocate = {
       enabled       = true,
       -- Chance auf Stellungswechsel nach HARM-Ausweichen (nur mobile Systeme)
-      chance        = { SA6 = 0.6, SA8 = 0.8, SA11 = 0.5, SA15 = 0.8 },
+      chance        = { SA6 = 0.25, SA8 = 0.35, SA11 = 0.2, SA15 = 0.35 },
       -- Chance auf Stellungswechsel beim normalen Abschalten im Blink-Modus
-      onBlinkChance = { SA6 = 0.15, SA8 = 0.25, SA11 = 0.1, SA15 = 0.25 },
+      onBlinkChance = { SA6 = 0.05, SA8 = 0.1, SA11 = 0.05, SA15 = 0.1 },
       distance      = {2000, 6000},
       speed         = 10,          -- m/s Gelände
       timeout       = 900,
@@ -1437,7 +1439,7 @@ function D.updateArms()
       if s and s ~= a.cand then a.cand, a.reactAt = s, nil end   -- Zielwechsel: neu bewerten
       if s then
         -- Entdeckung: nur wenn das Radar sendet, die ARM in Reichweite ist und Sichtlinie besteht
-        if not a.reactAt and s.radarOn then
+        if not a.reactAt and s.radarOn and (s.evasions or 0) < (cfg.maxEvasions or math.huge) then
           local rp = toV3(s.pos)
           rp.y = rp.y + 15
           local dx, dy, dz = rp.x - p.x, rp.y - p.y, rp.z - p.z
@@ -1453,6 +1455,7 @@ function D.updateArms()
         -- Reaktion der Crew (kommt evtl. zu spät, wenn die ARM vorher einschlägt)
         if a.reactAt and now >= a.reactAt then
           a.site = s
+          if not s.armDark then s.evasions = (s.evasions or 0) + 1 end
           s.armDark = (s.armDark or 0) + 1
           D.setRadar(s, false)
         end
@@ -4733,12 +4736,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.49 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.50 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.49 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.50 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
