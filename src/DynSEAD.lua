@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.47 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.48 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -174,9 +174,9 @@ D.cfg = {
       setupTime     = {30, 90},    -- Aufbauzeit am neuen Ort (Radar dunkel)
     },
     pointDefense = {
-      chance = 0.4,                -- Chance auf eigenständige SA-15 als Punktverteidigung
-      types  = { SA2 = true, SA6 = true, SA11 = true },
-      unit   = "Tor 9A331",
+      chance = 0.4,                -- Chance auf eigenständige SA-8 als Punktverteidigung der Mittelstrecken-Stellungen
+      types  = { SA2 = true, SA3 = true, SA6 = true, SA11 = true },
+      unit   = "Osa 9A33 ln",      -- früher SA-15 (Tor 9A331), auf Nutzerwunsch schwächer
       dist   = 600,
     },
     -- Ungefähre Einsatzreichweite je Typ (m); Hinterhalt schaltet bei Reichweite * ambushFactor ein
@@ -4731,12 +4731,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.47 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.48 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.47 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.48 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
