@@ -322,6 +322,10 @@ def cmd_tplside(a):
                 dst = country(dst_side, cid, cname).setdefault(cat, {}).setdefault("group", {})
                 dst[len(dst) + 1] = g; moved += 1
             if not keep: del c[cat]
+    cs = m["coalition"]["neutrals"].get("country", {})       # leeres Vorlagen-Land wieder entfernen
+    left = [c for c in cs.values() if not (c["id"] == NEUTRAL_TPL_COUNTRY[0] and
+            not any(k in c for k in ("plane", "helicopter", "vehicle", "ship", "static")))]
+    if len(left) != len(cs): m["coalition"]["neutrals"]["country"] = {i + 1: c for i, c in enumerate(left)}
     print("Vorlagen verschoben nach %s: %d" % (dst_side, moved))
     miz.save(a.out)
 
