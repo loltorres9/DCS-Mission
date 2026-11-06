@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.65 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.66 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -133,6 +133,32 @@ D.cfg = {
         { name = "Fuel depot near Palmyra",         lat = 34.55, lon = 38.20, type = "Tank",            category = "Warehouses" },
         { name = "Command post near Deir ez-Zor",   lat = 35.30, lon = 40.10, type = ".Command Center", category = "Fortifications" },
         { name = "Supply depot near Hama",          lat = 35.15, lon = 36.85, type = "Warehouse",       category = "Warehouses" },
+      },
+    },
+    -- Kola: Norwegen, Schweden und Finnland sind blau (Rechtecke westlich der russischen Grenze), Ziele sind die
+    -- russischen Plätze auf der Halbinsel Kola; die Front läuft von Westen nach Osten. Flugplatznamen der Karte
+    -- sind noch unbekannt (DEBUG > Write airfield list) – deshalb nur Rechtecke, keine Namenslisten
+    Kola = {
+      friendlyAreas = {
+        { name = "Nordic countries",   latMin = 58.0, latMax = 72.0, lonMin = 4.0,  lonMax = 28.5 },
+        { name = "Eastern Finland",    latMin = 58.0, latMax = 68.6, lonMin = 28.5, lonMax = 29.6 },
+        { name = "Eastern Finnmark",   latMin = 69.6, latMax = 72.0, lonMin = 28.5, lonMax = 31.5 },
+      },
+      exclude       = {},
+      ignore        = {},
+      tankers = {
+        -- über Nordfinnland/Nordnorwegen, weit genug von der Grenze (weichen SAM-Reichweiten aus)
+        { name = "Texaco", type = "KC-135",    kind = "boom",   callsignIndex = 1, flight = 1,
+          frequency = 255.0, tacan = 51, tacanId = "TEX", alt = 6100, speed = 165, track = { 69.20, 24.50, 69.20, 26.50 } },
+        { name = "Arco",   type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 1,
+          frequency = 256.0, tacan = 52, tacanId = "ARC", alt = 5500, speed = 160, track = { 68.80, 24.50, 68.80, 26.50 } },
+      },
+      deepStrike = {
+        { name = "Northern Fleet HQ at Severomorsk", lat = 69.07, lon = 33.42, type = ".Command Center", category = "Fortifications" },
+        { name = "Submarine base depot at Polyarny", lat = 69.20, lon = 33.45, type = "Warehouse",       category = "Warehouses" },
+        { name = "Port depot at Murmansk",           lat = 68.97, lon = 33.07, type = "Warehouse",       category = "Warehouses" },
+        { name = "Fuel depot near Olenegorsk",       lat = 68.15, lon = 33.25, type = "Tank",            category = "Warehouses" },
+        { name = "Command post near Monchegorsk",    lat = 67.95, lon = 32.93, type = ".Command Center", category = "Fortifications" },
       },
     },
   },
@@ -5952,12 +5978,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.65 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.66 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.65 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.66 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
