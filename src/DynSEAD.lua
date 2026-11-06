@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.66 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.67 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -135,23 +135,24 @@ D.cfg = {
         { name = "Supply depot near Hama",          lat = 35.15, lon = 36.85, type = "Warehouse",       category = "Warehouses" },
       },
     },
-    -- Kola: Norwegen, Schweden und Finnland sind blau (Rechtecke westlich der russischen Grenze), Ziele sind die
-    -- russischen Plätze auf der Halbinsel Kola; die Front läuft von Westen nach Osten. Flugplatznamen der Karte
-    -- sind noch unbekannt (DEBUG > Write airfield list) – deshalb nur Rechtecke, keine Namenslisten
+    -- Kola: Start nur in Bodø und Evenes (Nordnorwegen), alle anderen Plätze – Norwegen, Schweden, Finnland und die
+    -- Halbinsel Kola – sind Ziele; eine Front rückt von dort aus vor. Namen werden unscharf gesucht (Bodø/Bodo).
+    -- Bergiges Gelände: kleinere AO, Ziele näher am Flugplatz
     Kola = {
-      friendlyAreas = {
-        { name = "Nordic countries",   latMin = 58.0, latMax = 72.0, lonMin = 4.0,  lonMax = 28.5 },
-        { name = "Eastern Finland",    latMin = 58.0, latMax = 68.6, lonMin = 28.5, lonMax = 29.6 },
-        { name = "Eastern Finnmark",   latMin = 69.6, latMax = 72.0, lonMin = 28.5, lonMax = 31.5 },
-      },
+      homeBases     = { "Bodo", "Evenes" },
       exclude       = {},
       ignore        = {},
+      aoRadius      = 20000,       -- statt campaign.aoRadius (40 km)
+      aoBias        = 1.0,         -- 0.5 = gleichmäßig über die Fläche, 1 = deutlich näher am Flugplatz
+      fronts = {
+        { name = "Arctic", active = 2, bases = { "Bodo", "Evenes" } },
+      },
       tankers = {
-        -- über Nordfinnland/Nordnorwegen, weit genug von der Grenze (weichen SAM-Reichweiten aus)
-        { name = "Texaco", type = "KC-135",    kind = "boom",   callsignIndex = 1, flight = 1,
-          frequency = 255.0, tacan = 51, tacanId = "TEX", alt = 6100, speed = 165, track = { 69.20, 24.50, 69.20, 26.50 } },
-        { name = "Arco",   type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 1,
-          frequency = 256.0, tacan = 52, tacanId = "ARC", alt = 5500, speed = 160, track = { 68.80, 24.50, 68.80, 26.50 } },
+        -- rücken mit der Front vor (Start über dem Vestfjord zwischen Bodø und den Lofoten), außerhalb aller SAM-Reichweiten
+        { name = "Texaco", type = "KC-135",    kind = "boom",   callsignIndex = 1, flight = 1, front = "Arctic",
+          frequency = 255.0, tacan = 51, tacanId = "TEX", alt = 6100, speed = 165, track = { 67.90, 13.00, 67.90, 15.00 } },
+        { name = "Arco",   type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 1, front = "Arctic", offsetBack = 15000,
+          frequency = 256.0, tacan = 52, tacanId = "ARC", alt = 5500, speed = 160, track = { 67.70, 13.00, 67.70, 15.00 } },
       },
       deepStrike = {
         { name = "Northern Fleet HQ at Severomorsk", lat = 69.07, lon = 33.42, type = ".Command Center", category = "Fortifications" },
@@ -1145,7 +1146,8 @@ local function pickZone(list)
 end
 
 local function randomPointInZone(z, margin)
-  local r = math.max(0, z.radius - (margin or 0)) * math.sqrt(math.random())
+  -- bias 0.5 = gleichmäßig über die Fläche; größer = näher an der Mitte (D.map.aoBias, z. B. bergige Karten)
+  local r = math.max(0, z.radius - (margin or 0)) * math.random() ^ (z.bias or 0.5)
   local a = math.random() * 2 * math.pi
   return { x = z.x + r * math.cos(a), y = z.y + r * math.sin(a) }
 end
@@ -4760,7 +4762,8 @@ function D.activateAirbaseAO(name, front)
   if not ab then return end
   local p = toV2(ab:getPoint())
   local ao = {
-    name = name, airbase = name, x = p.x, y = p.y, radius = c.aoRadius,
+    name = name, airbase = name, x = p.x, y = p.y, radius = (D.map and D.map.aoRadius) or c.aoRadius,
+    bias = D.map and D.map.aoBias,
     samLeft = math.random(c.samPerAO[1], c.samPerAO[2]),
     casLeft = math.random(c.casPerAO[1], c.casPerAO[2]),
     samActive = 0, casActive = 0, state = "active", front = front,
@@ -5887,6 +5890,27 @@ local function inArea(ab, a)
   return ok and lat and lat >= a.latMin and lat <= a.latMax and lon >= a.lonMin and lon <= a.lonMax
 end
 
+-- Flugplatz per Name; unscharf (Groß/Klein, ø/å/æ/ä/ö, Satzzeichen egal), damit "Bodo" auch "Bodø" findet
+local function normName(s)
+  s = s:lower():gsub("\195\184", "o"):gsub("\195\152", "o"):gsub("\195\165", "a"):gsub("\195\133", "a")
+       :gsub("\195\166", "ae"):gsub("\195\164", "a"):gsub("\195\182", "o"):gsub("\195\188", "u")
+  return (s:gsub("[^%w]", ""))
+end
+
+function D.findAirbase(name)
+  local ab = Airbase.getByName(name)
+  if ab then return ab end
+  local q = normName(name)
+  for _, a in ipairs(world.getAirbases() or {}) do
+    local ok, n = pcall(function() return a:getName() end)
+    if ok and n and not D.ignoredBase(a) then
+      local nn = normName(n)
+      if nn == q or nn:sub(1, #q) == q then return a end
+    end
+  end
+  return nil
+end
+
 local function initAirbases()
   local c = D.cfg.campaign
   local map = D.map or {}
@@ -5899,7 +5923,7 @@ local function initAirbases()
   for _, n in ipairs(map.homeBases or {}) do homes[#homes + 1] = n end
   for _, n in ipairs(map.friendly or {}) do homes[#homes + 1] = n end
   for _, n in ipairs(homes) do
-    local hb = Airbase.getByName(n)
+    local hb = D.findAirbase(n)
     if hb then hb:setCoalition(D.cfg.blueSide) else env.warning("DynSEAD: home base not found: " .. n) end
   end
   for _, ab in ipairs(world.getAirbases() or {}) do
@@ -5961,8 +5985,8 @@ local function init()
     for _, fc in ipairs(D.map.fronts) do
       local f = { name = fc.name, active = fc.active or 1, pos = {} }
       for _, n in ipairs(fc.bases or {}) do
-        local ab = Airbase.getByName(n)
-        if ab then local p = toV2(ab:getPoint()); p.name = n; f.pos[#f.pos + 1] = p
+        local ab = D.findAirbase(n)
+        if ab then local p = toV2(ab:getPoint()); p.name = ab:getName(); f.pos[#f.pos + 1] = p
         else env.warning("DynSEAD: front " .. f.name .. ": airfield not found: " .. n) end
       end
       if #f.pos > 0 then D.fronts[#D.fronts + 1] = f end
@@ -5978,12 +6002,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.66 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.67 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.66 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.67 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 

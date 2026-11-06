@@ -305,13 +305,14 @@ BRIEF_PATCH = {
     "Kola": {
         "sortie": "Operation BROKEN SHIELD - Kola",
         "text": [("Coalition forces hold a single foothold at Senaki-Kolkhi.",
-                  "Coalition forces hold the airfields in Norway, Sweden and Finland."),
+                  "Coalition forces hold only Bodo and Evenes in northern Norway."),
                  ("the enemy IADS must be dismantled airfield by airfield.",
-                  "the enemy IADS on the Kola Peninsula must be dismantled airfield by airfield, pushing east.")],
+                  "the enemy IADS must be dismantled airfield by airfield, across northern Scandinavia and into the Kola Peninsula. "
+                  "The terrain is mountainous - objectives are concentrated close to the airfields.")],
         "task": [("always the ones closest to our lines.",
-                  "always the ones closest to our lines - the front moves east into the Kola Peninsula."),
+                  "always the ones closest to our lines - the front moves from Bodo and Evenes north and east, finally into the Kola Peninsula."),
                  ("Captured airfields become available for spawning.",
-                  "Spawning is available at all friendly airfields in Norway, Sweden and Finland and at every captured airfield.")],
+                  "Spawning is available at Bodo and Evenes and at every captured airfield.")],
     },
 }
 
