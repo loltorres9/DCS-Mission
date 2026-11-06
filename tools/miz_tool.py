@@ -157,7 +157,7 @@ def cmd_info(a):
         name = table.get(i, ("?",))[0]
         links = []
         for cat in ("planes", "helicopters"):
-            for t, e in ap["aircrafts"][cat].items():
+            for t, e in ap.get("aircrafts", {}).get(cat, {}).items():
                 if "linkDynTempl" in e: links.append(t)
         print("  %2d %-22s %-8s dyn=%s  Vorlagen: %s" % (i, name, ap.get("coalition"), ap.get("dynamicSpawn"), ", ".join(links) or "-"))
     n = sum(1 for _ in blue_groups(m))
@@ -323,8 +323,18 @@ def cmd_newmap(a):
     d = th_miz.table("l10n/DEFAULT/dictionary")
     res = th_miz.table("l10n/DEFAULT/mapResource")
     # 1) Dynamic Spawn mit unbegrenztem Bestand an allen Flugplätzen (Koalition setzt das Skript)
-    n = 0
+    # Flugzeuglisten der Lager fehlen in einer frisch angelegten Mission: aus der Basis-Mission übernehmen
+    tpl = next((ap.get("aircrafts") for ap in base.table("warehouses")["airports"].values()
+                if (ap.get("aircrafts") or {}).get("planes")), None)
+    n = filled = 0
     for ap in w.get("airports", {}).values():
+        if tpl and not (ap.get("aircrafts") or {}).get("planes"):
+            ac = copy.deepcopy(tpl)
+            for cat in ac.values():
+                for e in (cat.values() if isinstance(cat, dict) else []):
+                    if isinstance(e, dict): e.pop("linkDynTempl", None)
+            ap["aircrafts"] = ac
+            filled += 1
         ap.update({"dynamicSpawn": True, "allowHotStart": True, "dynamicCargo": True,
                    "unlimitedAircrafts": True, "unlimitedFuel": True, "unlimitedMunitions": True})
         n += 1
@@ -362,7 +372,18 @@ def cmd_newmap(a):
         k = "DictKey_sortie_%d" % m["maxDictId"]; m["sortie"] = k
     d[k] = patch.get("sortie", bd[bm["sortie"]] + " - " + th)
     m["forcedOptions"] = dict(bm.get("forcedOptions") or {})
-    print("Karte: %s | Flugplätze mit Dynamic Spawn: %d | Skript: %s" % (th, n, fname))
+    # 4) optional Datum/Uhrzeit/Temperatur (Jahreszeit der Karte hängt am Datum, z. B. Winter Dez–Feb)
+    if a.date:
+        y, mo, dd = (int(x) for x in a.date.split("-"))
+        m["date"] = {"Year": y, "Month": mo, "Day": dd}
+    if a.time:
+        hh, mm = (int(x) for x in a.time.split(":"))
+        m["start_time"] = hh * 3600 + mm * 60
+    if a.temp is not None:
+        m.setdefault("weather", {}).setdefault("season", {})["temperature"] = a.temp
+    print("Datum %s, Start %02d:%02d, Temperatur %s °C" % (m.get("date"), m.get("start_time", 0) // 3600,
+          m.get("start_time", 0) % 3600 // 60, m.get("weather", {}).get("season", {}).get("temperature")))
+    print("Karte: %s | Flugplätze mit Dynamic Spawn: %d (Flugzeugliste ergänzt: %d) | Skript: %s" % (th, n, filled, fname))
     if not patch: print("Hinweis: keine Briefing-Anpassung für diese Karte (BRIEF_PATCH)")
     th_miz.save(a.out)
 
@@ -536,7 +557,7 @@ if __name__ == "__main__":
     s.add_argument("--targets", action="store_true", help="gemeinsame Route über alle Ziele statt nur Startpunkt")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
     s = sp.add_parser("reroute"); s.add_argument("miz"); s.add_argument("--targets", action="store_true", help="gemeinsame Route über alle Ziele statt nur Startpunkt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_reroute)
-    s = sp.add_parser("newmap"); s.add_argument("miz"); s.add_argument("lua"); s.add_argument("--base", default="mission/Dynamic_Script.miz"); s.add_argument("-o", "--out", required=True); s.set_defaults(f=cmd_newmap)
+    s = sp.add_parser("newmap"); s.add_argument("miz"); s.add_argument("lua"); s.add_argument("--base", default="mission/Dynamic_Script.miz"); s.add_argument("--date", help="YYYY-MM-DD"); s.add_argument("--time", help="HH:MM Startzeit"); s.add_argument("--temp", type=int, help="Bodentemperatur °C"); s.add_argument("-o", "--out", required=True); s.set_defaults(f=cmd_newmap)
     s = sp.add_parser("untemplate"); s.add_argument("miz"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_untemplate)
     s = sp.add_parser("tplside"); s.add_argument("miz"); s.add_argument("side", choices=["neutral", "blue"]); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_tplside)
     s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all; mit --forced entfernt KEY= den Eintrag"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
