@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.65 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.69 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -135,6 +135,33 @@ D.cfg = {
         { name = "Supply depot near Hama",          lat = 35.15, lon = 36.85, type = "Warehouse",       category = "Warehouses" },
       },
     },
+    -- Kola: Start nur in Bodø und Evenes (Nordnorwegen), alle anderen Plätze – Norwegen, Schweden, Finnland und die
+    -- Halbinsel Kola – sind Ziele; eine Front rückt von dort aus vor. Namen werden unscharf gesucht (Bodø/Bodo).
+    -- Bergiges Gelände: kleinere AO, Ziele näher am Flugplatz
+    Kola = {
+      homeBases     = { "Bodo", "Evenes" },
+      exclude       = {},
+      ignore        = {},
+      aoRadius      = 20000,       -- statt campaign.aoRadius (40 km)
+      aoBias        = 1.0,         -- 0.5 = gleichmäßig über die Fläche, 1 = deutlich näher am Flugplatz
+      fronts = {
+        { name = "Arctic", active = 2, bases = { "Bodo", "Evenes" } },
+      },
+      tankers = {
+        -- rücken mit der Front vor (Start über dem Vestfjord zwischen Bodø und den Lofoten), außerhalb aller SAM-Reichweiten
+        { name = "Texaco", type = "KC-135",    kind = "boom",   callsignIndex = 1, flight = 1, front = "Arctic",
+          frequency = 255.0, tacan = 51, tacanId = "TEX", alt = 6100, speed = 165, track = { 67.90, 13.00, 67.90, 15.00 } },
+        { name = "Arco",   type = "KC135MPRS", kind = "drogue", callsignIndex = 2, flight = 1, front = "Arctic", offsetBack = 15000,
+          frequency = 256.0, tacan = 52, tacanId = "ARC", alt = 5500, speed = 160, track = { 67.70, 13.00, 67.70, 15.00 } },
+      },
+      deepStrike = {
+        { name = "Northern Fleet HQ at Severomorsk", lat = 69.07, lon = 33.42, type = ".Command Center", category = "Fortifications" },
+        { name = "Submarine base depot at Polyarny", lat = 69.20, lon = 33.45, type = "Warehouse",       category = "Warehouses" },
+        { name = "Port depot at Murmansk",           lat = 68.97, lon = 33.07, type = "Warehouse",       category = "Warehouses" },
+        { name = "Fuel depot near Olenegorsk",       lat = 68.15, lon = 33.25, type = "Tank",            category = "Warehouses" },
+        { name = "Command post near Monchegorsk",    lat = 67.95, lon = 32.93, type = ".Command Center", category = "Fortifications" },
+      },
+    },
   },
 
   sam = {
@@ -170,7 +197,7 @@ D.cfg = {
       chance        = { SA6 = 0.25, SA8 = 0.35, SA11 = 0.2, SA15 = 0.35 },
       -- Chance auf Stellungswechsel beim normalen Abschalten im Blink-Modus
       onBlinkChance = { SA6 = 0.05, SA8 = 0.1, SA11 = 0.05, SA15 = 0.1 },
-      distance      = {2000, 6000},
+      distance      = {1500, 4000},  -- v4.69: kürzere Wege (Wegfindung kostet Server-Leistung)
       speed         = 10,          -- m/s Gelände
       timeout       = 900,
       setupTime     = {30, 90},    -- Aufbauzeit am neuen Ort (Radar dunkel)
@@ -513,7 +540,7 @@ D.cfg = {
   -- nie zwischen eigenen Basen und den aktiven AOs; ohne Meldung, nicht im Lagebild, zählen nicht für die Eroberung
   ambush = {
     enabled      = true,
-    maxActive    = 3,
+    maxActive    = 2,              -- v4.69 (Server-Lag): vorher 3
     interval     = {600, 1200},    -- s zwischen zwei Spawn-Versuchen
     -- ältere, weniger tödliche Systeme (Nutzerwunsch); ohne SA-8-Punktverteidigung
     pool         = { SA3 = 3, SA2 = 2, SA6 = 2 },
@@ -528,9 +555,14 @@ D.cfg = {
   chaos = {
     skirmish = {                   -- kleine KI-Gefechte: US-Gerät (blau) gegen Regierungstruppen (rot)
       enabled     = true,
-      maxActive   = 3,
+      maxActive   = 2,             -- v4.69 (Server-Lag): vorher 3
       interval    = {300, 600},    -- s zwischen zwei neuen Gefechten
-      size        = {4, 6},        -- Fahrzeuge je Seite
+      size        = {3, 4},        -- Fahrzeuge je Seite (vorher 4–6)
+      -- Leistung (v4.69): KI-gegen-KI-Gefechte kosten viel Server-Leistung (Wegfindung, Feuergefecht, Netz).
+      -- Beide Gruppen schlafen (KI aus), bis ein Spieler näher als activateRange ist, und schlafen wieder,
+      -- wenn keiner mehr näher als sleepRange ist.
+      activateRange = 30000,
+      sleepRange    = 45000,
       gap         = {1500, 2500},  -- Anfangsabstand der Linien (m)
       lifetime    = {1800, 3600},  -- s; danach abgebaut, wenn kein Spieler näher als 20 km
       minBlueDist = 30000,         -- m von jeder blauen Basis
@@ -587,6 +619,18 @@ D.cfg = {
     interceptBase = { 40000, 300000 },  -- Abfangjäger starten von der Startbahn des roten Platzes, der der Reststrecke am
                                         -- nächsten ist (mind. 40 km von blauen Basen, max. 300 km von der C-130)
     interceptDist = 90000,         -- nur falls kein Platz passt: Luftstart so weit von der C-130 Richtung Feindgebiet
+  },
+
+  -- Patriot-Batterien auf eigenen Flugplätzen: nur an den maxSites frontnächsten Plätzen (Leistung), rücken mit der
+  -- Front vor (Batterien an Plätzen weit hinten werden abgebaut); zerstörte Batterien kommen nach respawnDelay wieder
+  bluePatriot = {
+    enabled      = true,
+    maxSites     = 4,
+    dist         = {1200, 3000},   -- Abstand der Stellung zur Platzmitte (m)
+    respawnDelay = 1800,
+    checkInterval = 60,
+    units = { "Patriot str", "Patriot ECS", "Patriot cp", "Patriot EPP", "Patriot AMG",
+              "Patriot ln", "Patriot ln", "Patriot ln", "Patriot ln" },
   },
 
   -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
@@ -1119,7 +1163,8 @@ local function pickZone(list)
 end
 
 local function randomPointInZone(z, margin)
-  local r = math.max(0, z.radius - (margin or 0)) * math.sqrt(math.random())
+  -- bias 0.5 = gleichmäßig über die Fläche; größer = näher an der Mitte (D.map.aoBias, z. B. bergige Karten)
+  local r = math.max(0, z.radius - (margin or 0)) * math.random() ^ (z.bias or 0.5)
   local a = math.random() * 2 * math.pi
   return { x = z.x + r * math.cos(a), y = z.y + r * math.sin(a) }
 end
@@ -2624,6 +2669,22 @@ local function moveTo(gname, to, speed, onRoad)
       ETA = 0, ETA_locked = false, task = emptyTask() } } } } })
 end
 
+-- Gefecht wecken/schlafen legen: Controller:setOnOff schaltet die KI der Gruppe (Wegfindung, Zielsuche, Feuer)
+local function setSkirmishAwake(sk, on)
+  if sk.awake == on then return end
+  sk.awake = on
+  for _, gname in ipairs({ sk.blue, sk.red }) do
+    local g = Group.getByName(gname)
+    if g and g:isExist() then pcall(function() g:getController():setOnOff(on) end) end
+  end
+  if on and not sk.moved then
+    -- beide Seiten rücken langsam auf die Mitte vor (nur einmal, kurze Strecke)
+    sk.moved = true
+    moveTo(sk.blue, offset(sk.pos, sk.hdg, 300), 4, false)
+    moveTo(sk.red, offset(sk.pos, sk.hdg, -300), 4, false)
+  end
+end
+
 -- Kleines Gefecht im Hinterland hinter den aktiven AOs (nie in einer AO, bei blauen Basen oder auf dem Weg dorthin)
 function D.spawnSkirmish()
   local c = D.cfg.chaos.skirmish
@@ -2646,13 +2707,11 @@ function D.spawnSkirmish()
         local bname, rname = nextId("SKB"), nextId("SKR")
         groundGroup(D.cfg.blueCountry, bname, c.blue, n, bp, hdg, 45, false)
         groundGroup(D.cfg.redCountry, rname, c.red, n, rp, hdg + math.pi, 45, D.hideOnMap())
-        -- beide Seiten rücken langsam auf die Mitte vor
-        timer.scheduleFunction(safe(function()
-          moveTo(bname, offset(p, hdg, 300), 4, false)
-          moveTo(rname, offset(p, hdg, -300), 4, false)
-        end, "Skirmish"), nil, timer.getTime() + 2)
-        D.skirmishes[#D.skirmishes + 1] = { pos = p, blue = bname, red = rname,
+        -- schlafen (KI aus), bis ein Spieler in die Nähe kommt (D.chaosTick weckt sie und lässt sie vorrücken)
+        local sk = { pos = p, hdg = hdg, blue = bname, red = rname, awake = true,
           expires = timer.getTime() + randRange(c.lifetime) }
+        setSkirmishAwake(sk, false)
+        D.skirmishes[#D.skirmishes + 1] = sk
         env.info(string.format("DynSEAD: skirmish %dv%d at %s", n, n, D.fmtPos(p)))
         return true
       end
@@ -2723,6 +2782,8 @@ function D.chaosTick(now, players)
     local sk = D.skirmishes[i]
     local nb, nr = groupAliveCount(sk.blue), groupAliveCount(sk.red)
     if (nb == 0 or nr == 0) and not sk.over then sk.over = now + 300 end
+    if not farFrom(sk.pos, players, cc.skirmish.activateRange or 30000) then setSkirmishAwake(sk, true)
+    elseif farFrom(sk.pos, players, cc.skirmish.sleepRange or 45000) then setSkirmishAwake(sk, false) end
     if (sk.over and now >= sk.over) or (now >= sk.expires and farFrom(sk.pos, players, 20000)) then
       destroyGroup(sk.blue); destroyGroup(sk.red)
       table.remove(D.skirmishes, i)
@@ -2750,6 +2811,84 @@ function D.chaosTick(now, players)
   if cc.helos.enabled and D.heloOn and #D.helos < cc.helos.maxActive and now >= D.nextHelo then
     D.nextHelo = now + randRange(cc.helos.interval)
     D.spawnHelo()
+  end
+end
+
+-------------------------------------------------------------------------------
+-- PATRIOT-BATTERIEN AUF EIGENEN FLUGPLÄTZEN
+-------------------------------------------------------------------------------
+D.patriots, D.nextPatriotCheck = {}, 0
+
+local function spawnPatriot(base)
+  local c = D.cfg.bluePatriot
+  for _ = 1, 40 do
+    local p = offset(base, math.random() * 2 * math.pi, randRange(c.dist))
+    if okGround(p) and land.getSurfaceType(p) == land.SurfaceType.LAND then
+      local gname = nextId("PATRIOT")
+      local hdg = math.random() * 2 * math.pi
+      local units = {}
+      for i, t in ipairs(c.units) do
+        local o
+        if t == "Patriot ln" then
+          o = offset(p, hdg + (i - 6) * math.pi / 2, 120)      -- Startgeräte im Kreis um die Stellung
+        else
+          o = offset(p, hdg + math.pi, 25 * i)                 -- Radar, Gefechtsstand, Strom, Antenne in einer Reihe
+        end
+        units[#units + 1] = { name = gname .. "-" .. i, type = t, x = o.x, y = o.y, heading = hdg,
+                              skill = "Excellent", playerCanDrive = false }
+      end
+      D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units })
+      local g = Group.getByName(gname)
+      if g and g:isExist() then
+        pcall(function() g:getController():setOption(AI.Option.Ground.id.ALARM_STATE, AI.Option.Ground.val.ALARM_STATE.RED) end)
+        env.info(string.format("DynSEAD: Patriot at %s (%s)", base.name or "?", gname))
+        return gname
+      end
+    end
+  end
+  return nil
+end
+
+-- frontnächste eigene Plätze (Abstand zur nächsten aktiven AO, ohne AO zum nächsten roten Platz)
+function D.patriotTick(now)
+  local c = D.cfg.bluePatriot
+  if now < D.nextPatriotCheck then return end
+  D.nextPatriotCheck = now + c.checkInterval
+  D.refreshBlueBases()
+  local refs = {}
+  for _, ao in ipairs(aoCandidates(nil)) do refs[#refs + 1] = { x = ao.x, y = ao.y } end
+  if #refs == 0 then for _, a in ipairs(redAirbases(0)) do refs[#refs + 1] = a.p end end
+  local function front(b)
+    local d = math.huge
+    for _, r in ipairs(refs) do d = math.min(d, dist(b, r)) end
+    return d
+  end
+  local list = {}
+  for _, b in ipairs(D.blueBases) do if b.name then list[#list + 1] = b end end
+  table.sort(list, function(a, b) return front(a) < front(b) end)
+  local want = {}
+  for i = 1, math.min(c.maxSites, #list) do want[list[i].name] = list[i] end
+  -- abbauen: Plätze, die nicht mehr frontnah oder nicht mehr blau sind
+  for name, pt in pairs(D.patriots) do
+    if not want[name] then
+      if pt.group then destroyGroup(pt.group) end
+      D.patriots[name] = nil
+    end
+  end
+  -- aufbauen bzw. nach Verlust wieder aufbauen
+  for name, b in pairs(want) do
+    local pt = D.patriots[name]
+    if pt and pt.group and groupAliveCount(pt.group) == 0 then
+      destroyGroup(pt.group)
+      pt.group, pt.retry = nil, now + c.respawnDelay
+      msg(string.format("%s: Patriot battery at %s destroyed – replacement in %d min.",
+        D.cfg.awacs.callsignName, name, math.floor(c.respawnDelay / 60)))
+    end
+    if not pt then pt = {}; D.patriots[name] = pt end
+    if not pt.group and now >= (pt.retry or 0) then
+      pt.group = spawnPatriot(b)
+      if not pt.group then pt.retry = now + 600 end
+    end
   end
 end
 
@@ -4734,7 +4873,8 @@ function D.activateAirbaseAO(name, front)
   if not ab then return end
   local p = toV2(ab:getPoint())
   local ao = {
-    name = name, airbase = name, x = p.x, y = p.y, radius = c.aoRadius,
+    name = name, airbase = name, x = p.x, y = p.y, radius = (D.map and D.map.aoRadius) or c.aoRadius,
+    bias = D.map and D.map.aoBias,
     samLeft = math.random(c.samPerAO[1], c.samPerAO[2]),
     casLeft = math.random(c.casPerAO[1], c.casPerAO[2]),
     samActive = 0, casActive = 0, state = "active", front = front,
@@ -5321,6 +5461,7 @@ function D.update()
   if D.cfg.scud.enabled then D.scudTick(now) end
   if D.cfg.csar.enabled then D.csarTick(now) end
   if D.cfg.escort.enabled then D.escortTick(now) end
+  if D.cfg.bluePatriot.enabled then D.patriotTick(now) end
   D.bomberTick(now)
   D.fortressTick(now)
 
@@ -5861,6 +6002,27 @@ local function inArea(ab, a)
   return ok and lat and lat >= a.latMin and lat <= a.latMax and lon >= a.lonMin and lon <= a.lonMax
 end
 
+-- Flugplatz per Name; unscharf (Groß/Klein, ø/å/æ/ä/ö, Satzzeichen egal), damit "Bodo" auch "Bodø" findet
+local function normName(s)
+  s = s:lower():gsub("\195\184", "o"):gsub("\195\152", "o"):gsub("\195\165", "a"):gsub("\195\133", "a")
+       :gsub("\195\166", "ae"):gsub("\195\164", "a"):gsub("\195\182", "o"):gsub("\195\188", "u")
+  return (s:gsub("[^%w]", ""))
+end
+
+function D.findAirbase(name)
+  local ab = Airbase.getByName(name)
+  if ab then return ab end
+  local q = normName(name)
+  for _, a in ipairs(world.getAirbases() or {}) do
+    local ok, n = pcall(function() return a:getName() end)
+    if ok and n and not D.ignoredBase(a) then
+      local nn = normName(n)
+      if nn == q or nn:sub(1, #q) == q then return a end
+    end
+  end
+  return nil
+end
+
 local function initAirbases()
   local c = D.cfg.campaign
   local map = D.map or {}
@@ -5873,7 +6035,7 @@ local function initAirbases()
   for _, n in ipairs(map.homeBases or {}) do homes[#homes + 1] = n end
   for _, n in ipairs(map.friendly or {}) do homes[#homes + 1] = n end
   for _, n in ipairs(homes) do
-    local hb = Airbase.getByName(n)
+    local hb = D.findAirbase(n)
     if hb then hb:setCoalition(D.cfg.blueSide) else env.warning("DynSEAD: home base not found: " .. n) end
   end
   for _, ab in ipairs(world.getAirbases() or {}) do
@@ -5935,8 +6097,8 @@ local function init()
     for _, fc in ipairs(D.map.fronts) do
       local f = { name = fc.name, active = fc.active or 1, pos = {} }
       for _, n in ipairs(fc.bases or {}) do
-        local ab = Airbase.getByName(n)
-        if ab then local p = toV2(ab:getPoint()); p.name = n; f.pos[#f.pos + 1] = p
+        local ab = D.findAirbase(n)
+        if ab then local p = toV2(ab:getPoint()); p.name = ab:getName(); f.pos[#f.pos + 1] = p
         else env.warning("DynSEAD: front " .. f.name .. ": airfield not found: " .. n) end
       end
       if #f.pos > 0 then D.fronts[#D.fronts + 1] = f end
@@ -5952,12 +6114,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.65 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.69 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.65 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.69 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 

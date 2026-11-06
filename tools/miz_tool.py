@@ -7,6 +7,9 @@ miz_tool.py – Werkzeuge für die DynSEAD-Mission (.miz = ZIP mit Lua-Tabellen)
   python tools/miz_tool.py templates MISSION.miz --base "TPL F-16 Senaki-Kolkhi" [--keep] [--targets] [-o OUT.miz]   (Caucasus, Syria)
   python tools/miz_tool.py reroute   MISSION.miz [--targets] [-o OUT.miz]   Wegpunkte aller Vorlagen neu: nur Startpunkt
                                      (Standard; AO-Koordinaten per F10-Menü) oder mit --targets eine gemeinsame Route über alle Ziele
+  python tools/miz_tool.py newmap    LEER.miz src/DynSEAD.lua -o mission/Dynamic_Script_KARTE.miz [--base mission/Dynamic_Script.miz]
+                                     leere Editor-Mission einer neuen Karte -> DynSEAD-Mission (Skript-Trigger, Briefing aus --base,
+                                     Dynamic Spawn + unbegrenzter Bestand an allen Flugplätzen, F10-Ansicht "All" erzwungen)
   python tools/miz_tool.py untemplate MISSION.miz [-o OUT.miz]   alle Dynamic-Spawn-Vorlagen und ihre Warehouse-Links entfernen
   python tools/miz_tool.py tplside   MISSION.miz neutral|blue [-o OUT.miz]   Vorlagen in neutrales Land (Schweiz) verschieben / zurück
   python tools/miz_tool.py options   MISSION.miz optionsView=optview_all --forced [-o OUT.miz]
@@ -154,7 +157,7 @@ def cmd_info(a):
         name = table.get(i, ("?",))[0]
         links = []
         for cat in ("planes", "helicopters"):
-            for t, e in ap["aircrafts"][cat].items():
+            for t, e in ap.get("aircrafts", {}).get(cat, {}).items():
                 if "linkDynTempl" in e: links.append(t)
         print("  %2d %-22s %-8s dyn=%s  Vorlagen: %s" % (i, name, ap.get("coalition"), ap.get("dynamicSpawn"), ", ".join(links) or "-"))
     n = sum(1 for _ in blue_groups(m))
@@ -295,6 +298,95 @@ def cmd_reroute(a):
         n += 1
     print("Wegpunkte neu gesetzt:", n, "Vorlagen | Route (%d Ziele): %s" % (len(route), ", ".join(table[t][0] for t in route)))
     miz.save(a.out)
+
+# ----------------------------------------------------------------- newmap
+# Karten-spezifische Anpassungen des Briefings (Text aus der Kaukasus-Mission)
+BRIEF_PATCH = {
+    "Kola": {
+        "sortie": "Operation BROKEN SHIELD - Kola",
+        "text": [("Coalition forces hold a single foothold at Senaki-Kolkhi.",
+                  "Coalition forces hold only Bodo and Evenes in northern Norway."),
+                 ("the enemy IADS must be dismantled airfield by airfield.",
+                  "the enemy IADS must be dismantled airfield by airfield, across northern Scandinavia and into the Kola Peninsula. "
+                  "The terrain is mountainous - objectives are concentrated close to the airfields.")],
+        "task": [("always the ones closest to our lines.",
+                  "always the ones closest to our lines - the front moves from Bodo and Evenes north and east, finally into the Kola Peninsula."),
+                 ("Captured airfields become available for spawning.",
+                  "Spawning is available at Bodo and Evenes and at every captured airfield.")],
+    },
+}
+
+def cmd_newmap(a):
+    th_miz = Miz(a.miz)
+    th = theatre(th_miz)
+    base = Miz(a.base)
+    m, w = th_miz.table("mission"), th_miz.table("warehouses")
+    d = th_miz.table("l10n/DEFAULT/dictionary")
+    res = th_miz.table("l10n/DEFAULT/mapResource")
+    # 1) Dynamic Spawn mit unbegrenztem Bestand an allen Flugplätzen (Koalition setzt das Skript)
+    # Flugzeuglisten der Lager fehlen in einer frisch angelegten Mission: aus der Basis-Mission übernehmen
+    tpl = next((ap.get("aircrafts") for ap in base.table("warehouses")["airports"].values()
+                if (ap.get("aircrafts") or {}).get("planes")), None)
+    n = filled = 0
+    for ap in w.get("airports", {}).values():
+        if tpl and not (ap.get("aircrafts") or {}).get("planes"):
+            ac = copy.deepcopy(tpl)
+            for cat in ac.values():
+                for e in (cat.values() if isinstance(cat, dict) else []):
+                    if isinstance(e, dict): e.pop("linkDynTempl", None)
+            ap["aircrafts"] = ac
+            filled += 1
+        ap.update({"dynamicSpawn": True, "allowHotStart": True, "dynamicCargo": True,
+                   "unlimitedAircrafts": True, "unlimitedFuel": True, "unlimitedMunitions": True})
+        n += 1
+    # 2) Skript als DO SCRIPT FILE beim Missionsstart (alte DynSEAD-Ressourcen entfernen)
+    for k in [k for k, v in res.items() if str(v).startswith(MAIN_SCRIPT_PREFIX) and str(v).endswith(".lua")]:
+        th_miz.files.pop("l10n/DEFAULT/" + res[k], None); del res[k]
+    src = open(a.lua, encoding="utf-8").read()
+    mv = re.search(r"DynSEAD v(\d+(?:\.\d+)*)", src)
+    fname = "%s_v%s.lua" % (MAIN_SCRIPT_PREFIX, mv.group(1))
+    key = th_miz.next_reskey()
+    res[key] = fname
+    th_miz.files["l10n/DEFAULT/" + fname] = src.encode("utf-8")
+    m["trigrules"] = {1: {"actions": {1: {"file": key, "predicate": "a_do_script_file"}}, "comment": "DynSEAD",
+                          "eventlist": "", "predicate": "triggerStart", "rules": {}}}
+    m["trig"] = {"actions": {1: 'a_do_script_file(getValueResourceByKey("%s"));' % key}, "conditions": {1: "return(true)"},
+                 "custom": {}, "customStartup": {}, "events": {}, "flag": {1: True}, "func": {},
+                 "funcStartup": {1: "if mission.trig.conditions[1]() then mission.trig.actions[1]() end"}}
+    # 3) Briefing aus der Basis-Mission, karten-spezifisch angepasst
+    bd = base.table("l10n/DEFAULT/dictionary")
+    bm = base.table("mission")
+    patch = BRIEF_PATCH.get(th, {})
+    for field, plist in (("descriptionText", patch.get("text", [])), ("descriptionBlueTask", patch.get("task", []))):
+        txt = bd[bm[field]]
+        for o, nw in plist:
+            if o not in txt: sys.exit("Briefing-Text nicht gefunden: " + o)
+            txt = txt.replace(o, nw)
+        k = m.get(field) if str(m.get(field, "")).startswith("DictKey_") else None
+        if not k:
+            m["maxDictId"] = m.get("maxDictId", 0) + 1
+            k = "DictKey_%s_%d" % (field, m["maxDictId"]); m[field] = k
+        d[k] = txt
+    k = m.get("sortie") if str(m.get("sortie", "")).startswith("DictKey_") else None
+    if not k:
+        m["maxDictId"] = m.get("maxDictId", 0) + 1
+        k = "DictKey_sortie_%d" % m["maxDictId"]; m["sortie"] = k
+    d[k] = patch.get("sortie", bd[bm["sortie"]] + " - " + th)
+    m["forcedOptions"] = dict(bm.get("forcedOptions") or {})
+    # 4) optional Datum/Uhrzeit/Temperatur (Jahreszeit der Karte hängt am Datum, z. B. Winter Dez–Feb)
+    if a.date:
+        y, mo, dd = (int(x) for x in a.date.split("-"))
+        m["date"] = {"Year": y, "Month": mo, "Day": dd}
+    if a.time:
+        hh, mm = (int(x) for x in a.time.split(":"))
+        m["start_time"] = hh * 3600 + mm * 60
+    if a.temp is not None:
+        m.setdefault("weather", {}).setdefault("season", {})["temperature"] = a.temp
+    print("Datum %s, Start %02d:%02d, Temperatur %s °C" % (m.get("date"), m.get("start_time", 0) // 3600,
+          m.get("start_time", 0) % 3600 // 60, m.get("weather", {}).get("season", {}).get("temperature")))
+    print("Karte: %s | Flugplätze mit Dynamic Spawn: %d (Flugzeugliste ergänzt: %d) | Skript: %s" % (th, n, filled, fname))
+    if not patch: print("Hinweis: keine Briefing-Anpassung für diese Karte (BRIEF_PATCH)")
+    th_miz.save(a.out)
 
 # ----------------------------------------------------------------- untemplate
 def cmd_untemplate(a):
@@ -466,6 +558,7 @@ if __name__ == "__main__":
     s.add_argument("--targets", action="store_true", help="gemeinsame Route über alle Ziele statt nur Startpunkt")
     s.add_argument("-o", "--out"); s.set_defaults(f=cmd_templates)
     s = sp.add_parser("reroute"); s.add_argument("miz"); s.add_argument("--targets", action="store_true", help="gemeinsame Route über alle Ziele statt nur Startpunkt"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_reroute)
+    s = sp.add_parser("newmap"); s.add_argument("miz"); s.add_argument("lua"); s.add_argument("--base", default="mission/Dynamic_Script.miz"); s.add_argument("--date", help="YYYY-MM-DD"); s.add_argument("--time", help="HH:MM Startzeit"); s.add_argument("--temp", type=int, help="Bodentemperatur °C"); s.add_argument("-o", "--out", required=True); s.set_defaults(f=cmd_newmap)
     s = sp.add_parser("untemplate"); s.add_argument("miz"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_untemplate)
     s = sp.add_parser("tplside"); s.add_argument("miz"); s.add_argument("side", choices=["neutral", "blue"]); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_tplside)
     s = sp.add_parser("options");   s.add_argument("miz"); s.add_argument("pairs", nargs="+", help="KEY=WERT, z.B. optionsView=optview_all; mit --forced entfernt KEY= den Eintrag"); s.add_argument("--forced", action="store_true", help="in mission.forcedOptions statt in der Datei options setzen"); s.add_argument("-o", "--out"); s.set_defaults(f=cmd_options)
