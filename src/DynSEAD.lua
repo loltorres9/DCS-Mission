@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.67 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.68 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -614,6 +614,18 @@ D.cfg = {
     interceptBase = { 40000, 300000 },  -- Abfangjäger starten von der Startbahn des roten Platzes, der der Reststrecke am
                                         -- nächsten ist (mind. 40 km von blauen Basen, max. 300 km von der C-130)
     interceptDist = 90000,         -- nur falls kein Platz passt: Luftstart so weit von der C-130 Richtung Feindgebiet
+  },
+
+  -- Patriot-Batterien auf eigenen Flugplätzen: nur an den maxSites frontnächsten Plätzen (Leistung), rücken mit der
+  -- Front vor (Batterien an Plätzen weit hinten werden abgebaut); zerstörte Batterien kommen nach respawnDelay wieder
+  bluePatriot = {
+    enabled      = true,
+    maxSites     = 4,
+    dist         = {1200, 3000},   -- Abstand der Stellung zur Platzmitte (m)
+    respawnDelay = 1800,
+    checkInterval = 60,
+    units = { "Patriot str", "Patriot ECS", "Patriot cp", "Patriot EPP", "Patriot AMG",
+              "Patriot ln", "Patriot ln", "Patriot ln", "Patriot ln" },
   },
 
   -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
@@ -2778,6 +2790,84 @@ function D.chaosTick(now, players)
   if cc.helos.enabled and D.heloOn and #D.helos < cc.helos.maxActive and now >= D.nextHelo then
     D.nextHelo = now + randRange(cc.helos.interval)
     D.spawnHelo()
+  end
+end
+
+-------------------------------------------------------------------------------
+-- PATRIOT-BATTERIEN AUF EIGENEN FLUGPLÄTZEN
+-------------------------------------------------------------------------------
+D.patriots, D.nextPatriotCheck = {}, 0
+
+local function spawnPatriot(base)
+  local c = D.cfg.bluePatriot
+  for _ = 1, 40 do
+    local p = offset(base, math.random() * 2 * math.pi, randRange(c.dist))
+    if okGround(p) and land.getSurfaceType(p) == land.SurfaceType.LAND then
+      local gname = nextId("PATRIOT")
+      local hdg = math.random() * 2 * math.pi
+      local units = {}
+      for i, t in ipairs(c.units) do
+        local o
+        if t == "Patriot ln" then
+          o = offset(p, hdg + (i - 6) * math.pi / 2, 120)      -- Startgeräte im Kreis um die Stellung
+        else
+          o = offset(p, hdg + math.pi, 25 * i)                 -- Radar, Gefechtsstand, Strom, Antenne in einer Reihe
+        end
+        units[#units + 1] = { name = gname .. "-" .. i, type = t, x = o.x, y = o.y, heading = hdg,
+                              skill = "Excellent", playerCanDrive = false }
+      end
+      D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units })
+      local g = Group.getByName(gname)
+      if g and g:isExist() then
+        pcall(function() g:getController():setOption(AI.Option.Ground.id.ALARM_STATE, AI.Option.Ground.val.ALARM_STATE.RED) end)
+        env.info(string.format("DynSEAD: Patriot at %s (%s)", base.name or "?", gname))
+        return gname
+      end
+    end
+  end
+  return nil
+end
+
+-- frontnächste eigene Plätze (Abstand zur nächsten aktiven AO, ohne AO zum nächsten roten Platz)
+function D.patriotTick(now)
+  local c = D.cfg.bluePatriot
+  if now < D.nextPatriotCheck then return end
+  D.nextPatriotCheck = now + c.checkInterval
+  D.refreshBlueBases()
+  local refs = {}
+  for _, ao in ipairs(aoCandidates(nil)) do refs[#refs + 1] = { x = ao.x, y = ao.y } end
+  if #refs == 0 then for _, a in ipairs(redAirbases(0)) do refs[#refs + 1] = a.p end end
+  local function front(b)
+    local d = math.huge
+    for _, r in ipairs(refs) do d = math.min(d, dist(b, r)) end
+    return d
+  end
+  local list = {}
+  for _, b in ipairs(D.blueBases) do if b.name then list[#list + 1] = b end end
+  table.sort(list, function(a, b) return front(a) < front(b) end)
+  local want = {}
+  for i = 1, math.min(c.maxSites, #list) do want[list[i].name] = list[i] end
+  -- abbauen: Plätze, die nicht mehr frontnah oder nicht mehr blau sind
+  for name, pt in pairs(D.patriots) do
+    if not want[name] then
+      if pt.group then destroyGroup(pt.group) end
+      D.patriots[name] = nil
+    end
+  end
+  -- aufbauen bzw. nach Verlust wieder aufbauen
+  for name, b in pairs(want) do
+    local pt = D.patriots[name]
+    if pt and pt.group and groupAliveCount(pt.group) == 0 then
+      destroyGroup(pt.group)
+      pt.group, pt.retry = nil, now + c.respawnDelay
+      msg(string.format("%s: Patriot battery at %s destroyed – replacement in %d min.",
+        D.cfg.awacs.callsignName, name, math.floor(c.respawnDelay / 60)))
+    end
+    if not pt then pt = {}; D.patriots[name] = pt end
+    if not pt.group and now >= (pt.retry or 0) then
+      pt.group = spawnPatriot(b)
+      if not pt.group then pt.retry = now + 600 end
+    end
   end
 end
 
@@ -5350,6 +5440,7 @@ function D.update()
   if D.cfg.scud.enabled then D.scudTick(now) end
   if D.cfg.csar.enabled then D.csarTick(now) end
   if D.cfg.escort.enabled then D.escortTick(now) end
+  if D.cfg.bluePatriot.enabled then D.patriotTick(now) end
   D.bomberTick(now)
   D.fortressTick(now)
 
@@ -6002,12 +6093,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.67 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.68 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.67 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.68 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
