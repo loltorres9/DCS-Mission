@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.68 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.69 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -197,7 +197,7 @@ D.cfg = {
       chance        = { SA6 = 0.25, SA8 = 0.35, SA11 = 0.2, SA15 = 0.35 },
       -- Chance auf Stellungswechsel beim normalen Abschalten im Blink-Modus
       onBlinkChance = { SA6 = 0.05, SA8 = 0.1, SA11 = 0.05, SA15 = 0.1 },
-      distance      = {2000, 6000},
+      distance      = {1500, 4000},  -- v4.69: kürzere Wege (Wegfindung kostet Server-Leistung)
       speed         = 10,          -- m/s Gelände
       timeout       = 900,
       setupTime     = {30, 90},    -- Aufbauzeit am neuen Ort (Radar dunkel)
@@ -540,7 +540,7 @@ D.cfg = {
   -- nie zwischen eigenen Basen und den aktiven AOs; ohne Meldung, nicht im Lagebild, zählen nicht für die Eroberung
   ambush = {
     enabled      = true,
-    maxActive    = 3,
+    maxActive    = 2,              -- v4.69 (Server-Lag): vorher 3
     interval     = {600, 1200},    -- s zwischen zwei Spawn-Versuchen
     -- ältere, weniger tödliche Systeme (Nutzerwunsch); ohne SA-8-Punktverteidigung
     pool         = { SA3 = 3, SA2 = 2, SA6 = 2 },
@@ -555,9 +555,14 @@ D.cfg = {
   chaos = {
     skirmish = {                   -- kleine KI-Gefechte: US-Gerät (blau) gegen Regierungstruppen (rot)
       enabled     = true,
-      maxActive   = 3,
+      maxActive   = 2,             -- v4.69 (Server-Lag): vorher 3
       interval    = {300, 600},    -- s zwischen zwei neuen Gefechten
-      size        = {4, 6},        -- Fahrzeuge je Seite
+      size        = {3, 4},        -- Fahrzeuge je Seite (vorher 4–6)
+      -- Leistung (v4.69): KI-gegen-KI-Gefechte kosten viel Server-Leistung (Wegfindung, Feuergefecht, Netz).
+      -- Beide Gruppen schlafen (KI aus), bis ein Spieler näher als activateRange ist, und schlafen wieder,
+      -- wenn keiner mehr näher als sleepRange ist.
+      activateRange = 30000,
+      sleepRange    = 45000,
       gap         = {1500, 2500},  -- Anfangsabstand der Linien (m)
       lifetime    = {1800, 3600},  -- s; danach abgebaut, wenn kein Spieler näher als 20 km
       minBlueDist = 30000,         -- m von jeder blauen Basis
@@ -2664,6 +2669,22 @@ local function moveTo(gname, to, speed, onRoad)
       ETA = 0, ETA_locked = false, task = emptyTask() } } } } })
 end
 
+-- Gefecht wecken/schlafen legen: Controller:setOnOff schaltet die KI der Gruppe (Wegfindung, Zielsuche, Feuer)
+local function setSkirmishAwake(sk, on)
+  if sk.awake == on then return end
+  sk.awake = on
+  for _, gname in ipairs({ sk.blue, sk.red }) do
+    local g = Group.getByName(gname)
+    if g and g:isExist() then pcall(function() g:getController():setOnOff(on) end) end
+  end
+  if on and not sk.moved then
+    -- beide Seiten rücken langsam auf die Mitte vor (nur einmal, kurze Strecke)
+    sk.moved = true
+    moveTo(sk.blue, offset(sk.pos, sk.hdg, 300), 4, false)
+    moveTo(sk.red, offset(sk.pos, sk.hdg, -300), 4, false)
+  end
+end
+
 -- Kleines Gefecht im Hinterland hinter den aktiven AOs (nie in einer AO, bei blauen Basen oder auf dem Weg dorthin)
 function D.spawnSkirmish()
   local c = D.cfg.chaos.skirmish
@@ -2686,13 +2707,11 @@ function D.spawnSkirmish()
         local bname, rname = nextId("SKB"), nextId("SKR")
         groundGroup(D.cfg.blueCountry, bname, c.blue, n, bp, hdg, 45, false)
         groundGroup(D.cfg.redCountry, rname, c.red, n, rp, hdg + math.pi, 45, D.hideOnMap())
-        -- beide Seiten rücken langsam auf die Mitte vor
-        timer.scheduleFunction(safe(function()
-          moveTo(bname, offset(p, hdg, 300), 4, false)
-          moveTo(rname, offset(p, hdg, -300), 4, false)
-        end, "Skirmish"), nil, timer.getTime() + 2)
-        D.skirmishes[#D.skirmishes + 1] = { pos = p, blue = bname, red = rname,
+        -- schlafen (KI aus), bis ein Spieler in die Nähe kommt (D.chaosTick weckt sie und lässt sie vorrücken)
+        local sk = { pos = p, hdg = hdg, blue = bname, red = rname, awake = true,
           expires = timer.getTime() + randRange(c.lifetime) }
+        setSkirmishAwake(sk, false)
+        D.skirmishes[#D.skirmishes + 1] = sk
         env.info(string.format("DynSEAD: skirmish %dv%d at %s", n, n, D.fmtPos(p)))
         return true
       end
@@ -2763,6 +2782,8 @@ function D.chaosTick(now, players)
     local sk = D.skirmishes[i]
     local nb, nr = groupAliveCount(sk.blue), groupAliveCount(sk.red)
     if (nb == 0 or nr == 0) and not sk.over then sk.over = now + 300 end
+    if not farFrom(sk.pos, players, cc.skirmish.activateRange or 30000) then setSkirmishAwake(sk, true)
+    elseif farFrom(sk.pos, players, cc.skirmish.sleepRange or 45000) then setSkirmishAwake(sk, false) end
     if (sk.over and now >= sk.over) or (now >= sk.expires and farFrom(sk.pos, players, 20000)) then
       destroyGroup(sk.blue); destroyGroup(sk.red)
       table.remove(D.skirmishes, i)
@@ -6093,12 +6114,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.68 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.69 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.68 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.69 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
