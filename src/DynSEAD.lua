@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.70 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.71 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -253,6 +253,9 @@ D.cfg = {
     legLength     = 60000,
     immortal      = true,          -- AWACS unverwundbar und für Gegner unsichtbar
     respawnDelay  = 600,
+    -- v4.71 (Nutzer: „E-3 verliert Treibstoff und landet“): bei weniger als reliefFuel (Anteil) Tank oder
+    -- wenn er gelandet ist, wird er sofort durch eine frische Maschine auf Station abgelöst (gilt auch für Tanker)
+    reliefFuel    = 0.3,
   },
 
   -- Sprachausgabe von Overlord aus vorproduzierten WAV-Bausteinen (ohne SRS)
@@ -1855,10 +1858,29 @@ function D.repositionAwacs()
   msg(cfg.callsignName .. " is repositioning to support the new AO.")
 end
 
+-- Ablösung: wenig Sprit oder gelandet (KI fliegt bei Bingo-Sprit nach Hause) -> frische Maschine auf Station
+local function needsRelief(u)
+  if not u then return false end
+  if not u:inAir() then return true end
+  local ok, f = pcall(function() return u:getFuel() end)
+  return ok and type(f) == "number" and f < (D.cfg.awacs.reliefFuel or 0.3)
+end
+
 function D.checkAwacs(now)
   local cfg = D.cfg.awacs
   if not cfg.enabled then return end
-  if D.awacsUnit() then return end
+  local u = D.awacsUnit()
+  if u and not D.awacsRespawnAt and now >= (D.awacsGrace or 0) and needsRelief(u) then
+    env.info("DynSEAD: AWACS relieved (low fuel or landed)")
+    destroyGroup(cfg.groupName)
+    if D.spawnAwacs() then
+      D.awacsGrace = now + 120     -- frisch gespawnte Maschine nicht sofort wieder prüfen
+      msg(cfg.callsignName .. " relieved on station by a fresh aircraft.")
+      return
+    end
+    u = nil
+  end
+  if u then return end
   if not D.awacsRespawnAt then
     if D.awacsSpawned then
       msg(string.format("%s is down! Replacement expected in %d min.", cfg.callsignName, math.floor(cfg.respawnDelay / 60)))
@@ -2049,7 +2071,20 @@ function D.checkTankers(now)
   if not cfg.enabled then return end
   for _, t in ipairs(cfg.list) do
     local u = supportUnit(t.name)
-    if not (u and u:inAir()) then
+    local relieved = false
+    if u and u:inAir() and now >= (t.grace or 0) and needsRelief(u) then
+      -- wenig Sprit: sofort ablösen, bevor er die Station verlässt
+      env.info("DynSEAD: tanker " .. t.name .. " relieved (low fuel)")
+      destroyGroup(t.name)
+      if D.spawnTanker(t) then
+        relieved, t.grace = true, now + 120
+        msg(string.format("%s relieved on station by a fresh tanker.", t.name))
+      else
+        t.respawnAt = now + 60
+      end
+      u = supportUnit(t.name)
+    end
+    if not relieved and not (u and u:inAir()) then
       if not t.respawnAt then
         if t.spawned then
           msg(string.format("%s is off station. Replacement expected in %d min.", t.name, math.floor(cfg.respawnDelay / 60)))
@@ -6152,12 +6187,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.70 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.71 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.70 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.71 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
