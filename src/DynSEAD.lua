@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.69 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.70 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -631,6 +631,10 @@ D.cfg = {
     checkInterval = 60,
     units = { "Patriot str", "Patriot ECS", "Patriot cp", "Patriot EPP", "Patriot AMG",
               "Patriot ln", "Patriot ln", "Patriot ln", "Patriot ln" },
+    -- v4.70 (Nutzer: „Patriots ignorieren Feindflieger in 20 NM“): Standort mit freiem Horizont
+    -- (D.samSpotClear: Hangneigung, Berge, Bebauung) und unter den Kandidaten der höchstgelegene;
+    -- Waffen frei, volle Einsatzreichweite, kein Ausweichen bei Beschuss, Optionen werden bei jeder Prüfung erneuert
+    candidates   = 8,              -- geprüfte freie Standorte, davon der höchste
   },
 
   -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
@@ -2819,11 +2823,42 @@ end
 -------------------------------------------------------------------------------
 D.patriots, D.nextPatriotCheck = {}, 0
 
+-- Feuerbereitschaft: Radar an, Waffen frei, volle Reichweite, nicht zerstreuen (Zerstreuen reißt die Batterie auseinander)
+local function patriotOptions(gname)
+  local g = Group.getByName(gname)
+  if not g or not g:isExist() then return end
+  local ctl, G = g:getController(), AI.Option.Ground
+  pcall(function() ctl:setOnOff(true) end)
+  pcall(function() ctl:setOption(G.id.ALARM_STATE, G.val.ALARM_STATE.RED) end)
+  pcall(function() ctl:setOption(G.id.ROE, G.val.ROE.OPEN_FIRE) end)
+  if G.id.AC_ENGAGEMENT_RANGE_RESTRICTION then
+    pcall(function() ctl:setOption(G.id.AC_ENGAGEMENT_RANGE_RESTRICTION, 100) end)
+  end
+  if G.id.DISPERSE_ON_ATTACK then
+    pcall(function() ctl:setOption(G.id.DISPERSE_ON_ATTACK, 0) end)
+  end
+end
+
+local function patriotSpot(base)
+  local c = D.cfg.bluePatriot
+  local best, bestH, n = nil, -math.huge, 0
+  for i = 1, 60 do
+    local p = offset(base, math.random() * 2 * math.pi, randRange(c.dist))
+    if okGround(p) and land.getSurfaceType(p) == land.SurfaceType.LAND and (i > 40 or D.samSpotClear(p)) then
+      local h = land.getHeight(p)
+      if h > bestH then best, bestH = p, h end
+      n = n + 1
+      if n >= (c.candidates or 8) or i > 40 then break end
+    end
+  end
+  return best
+end
+
 local function spawnPatriot(base)
   local c = D.cfg.bluePatriot
-  for _ = 1, 40 do
-    local p = offset(base, math.random() * 2 * math.pi, randRange(c.dist))
-    if okGround(p) and land.getSurfaceType(p) == land.SurfaceType.LAND then
+  for _ = 1, 3 do
+    local p = patriotSpot(base)
+    if p then
       local gname = nextId("PATRIOT")
       local hdg = math.random() * 2 * math.pi
       local units = {}
@@ -2840,8 +2875,10 @@ local function spawnPatriot(base)
       D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units })
       local g = Group.getByName(gname)
       if g and g:isExist() then
-        pcall(function() g:getController():setOption(AI.Option.Ground.id.ALARM_STATE, AI.Option.Ground.val.ALARM_STATE.RED) end)
-        env.info(string.format("DynSEAD: Patriot at %s (%s)", base.name or "?", gname))
+        patriotOptions(gname)
+        -- direkt nach dem Spawn gesetzte Optionen greifen nicht immer: nach 2 s erneut
+        timer.scheduleFunction(safe(function() patriotOptions(gname) end, "Patriot"), nil, timer.getTime() + 2)
+        env.info(string.format("DynSEAD: Patriot at %s (%s), elevation %d m", base.name or "?", gname, land.getHeight(p)))
         return gname
       end
     end
@@ -2885,6 +2922,7 @@ function D.patriotTick(now)
         D.cfg.awacs.callsignName, name, math.floor(c.respawnDelay / 60)))
     end
     if not pt then pt = {}; D.patriots[name] = pt end
+    if pt.group then patriotOptions(pt.group) end
     if not pt.group and now >= (pt.retry or 0) then
       pt.group = spawnPatriot(b)
       if not pt.group then pt.retry = now + 600 end
@@ -6114,12 +6152,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.69 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.70 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.69 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.70 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
