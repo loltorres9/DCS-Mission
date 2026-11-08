@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.72 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.73 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -624,16 +624,24 @@ D.cfg = {
     interceptDist = 90000,         -- nur falls kein Platz passt: Luftstart so weit von der C-130 Richtung Feindgebiet
   },
 
-  -- Patriot-Batterien auf eigenen Flugplätzen: nur an den maxSites frontnächsten Plätzen (Leistung), rücken mit der
-  -- Front vor (Batterien an Plätzen weit hinten werden abgebaut); zerstörte Batterien kommen nach respawnDelay wieder
+  -- Flugabwehr auf eigenen Flugplätzen (Name bluePatriot historisch): nur an den maxSites frontnächsten Plätzen (Leistung),
+  -- rücken mit der Front vor (Stellungen an Plätzen weit hinten werden abgebaut); zerstörte Stellungen kommen nach respawnDelay wieder
   bluePatriot = {
     enabled      = true,
     maxSites     = 4,
     dist         = {1200, 3000},   -- Abstand der Stellung zur Platzmitte (m)
     respawnDelay = 1800,
     checkInterval = 60,
-    units = { "Patriot str", "Patriot ECS", "Patriot cp", "Patriot EPP", "Patriot AMG",
-              "Patriot ln", "Patriot ln", "Patriot ln", "Patriot ln" },
+    -- v4.73 (Nutzer: „Patriot hat zu viel Reichweite – Hawks, als SHORAD NASAMS dazu, gemischt an einem Spot“):
+    -- je Platz eine Stellung aus mehreren Gruppen; launcher = Typ der Startgeräte (im Kreis um die Gruppenmitte),
+    -- shift = Versatz der Gruppenmitte entlang der Startbahn (m); Stellung gilt erst als zerstört, wenn alle Gruppen tot sind
+    label  = "Hawk/NASAMS",
+    groups = {
+      { prefix = "HAWK",   launcher = "Hawk ln",     shift = 0,
+        units = { "Hawk sr", "Hawk tr", "Hawk cwar", "Hawk pcp", "Hawk ln", "Hawk ln", "Hawk ln" } },
+      { prefix = "NASAMS", launcher = "NASAMS_LN_C", shift = 220,
+        units = { "NASAMS_Radar_MPQ64F1", "NASAMS_Command_Post", "NASAMS_LN_C", "NASAMS_LN_C" } },
+    },
     -- v4.70 (Nutzer: „Patriots ignorieren Feindflieger in 20 NM“): Standort mit freiem Horizont
     -- (D.samSpotClear: Hangneigung, Berge, Bebauung) und unter den Kandidaten der höchstgelegene;
     -- Waffen frei, volle Einsatzreichweite, kein Ausweichen bei Beschuss, Optionen werden bei jeder Prüfung erneuert
@@ -2902,7 +2910,7 @@ local function patriotRunwaySpots(base)
           if not ok then break end
           if sp.vTerminalPos and dist(p, toV2(sp.vTerminalPos)) < c.parkingClear then ok = false end
         end
-        if ok then out[#out + 1] = p end
+        if ok then p.hdg = hdg; out[#out + 1] = p end
       end
     end
   end
@@ -2932,36 +2940,61 @@ local function patriotSpot(base)
   return best
 end
 
+local function spawnAdGroup(base, p, along, def, idx)
+  local c = D.cfg.bluePatriot
+  local gp = offset(p, along, def.shift or 0)
+  if (def.shift or 0) ~= 0 and not okGround(gp) then gp = p end
+  local gname = nextId(def.prefix or "AD")
+  local hdg = math.random() * 2 * math.pi
+  local nl = 0
+  for _, t in ipairs(def.units) do if t == def.launcher then nl = nl + 1 end end
+  local units, li, oi = {}, 0, 0
+  for i, t in ipairs(def.units) do
+    local o
+    if t == def.launcher then
+      li = li + 1
+      o = offset(gp, hdg + li * 2 * math.pi / math.max(nl, 1), c.launcherRadius or 70)  -- Startgeräte im Kreis
+    else
+      oi = oi + 1
+      o = offset(gp, hdg + math.pi, 25 * oi)              -- Radare und Gefechtsstand in einer Reihe
+    end
+    units[#units + 1] = { name = gname .. "-" .. i, type = t, x = o.x, y = o.y, heading = hdg,
+                          skill = "Excellent", playerCanDrive = false }
+  end
+  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units })
+  local g = Group.getByName(gname)
+  if not (g and g:isExist()) then return nil end
+  patriotOptions(gname)
+  -- direkt nach dem Spawn gesetzte Optionen greifen nicht immer: nach 2 s erneut
+  timer.scheduleFunction(safe(function() patriotOptions(gname) end, "AirDefense"), nil, timer.getTime() + 2)
+  env.info(string.format("DynSEAD: air defense %s at %s (%s), elevation %d m", def.prefix or "?", base.name or "?",
+    gname, land.getHeight(gp)))
+  return gname
+end
+
+-- eine Stellung aus allen Gruppen von cfg.bluePatriot.groups an einem Standort; liefert die Liste der Gruppennamen
 local function spawnPatriot(base)
   local c = D.cfg.bluePatriot
   for _ = 1, 3 do
     local p = patriotSpot(base)
     if p then
-      local gname = nextId("PATRIOT")
-      local hdg = math.random() * 2 * math.pi
-      local units = {}
-      for i, t in ipairs(c.units) do
-        local o
-        if t == "Patriot ln" then
-          o = offset(p, hdg + (i - 6) * math.pi / 2, c.launcherRadius or 70)      -- Startgeräte im Kreis um die Stellung
-        else
-          o = offset(p, hdg + math.pi, 25 * i)                 -- Radar, Gefechtsstand, Strom, Antenne in einer Reihe
-        end
-        units[#units + 1] = { name = gname .. "-" .. i, type = t, x = o.x, y = o.y, heading = hdg,
-                              skill = "Excellent", playerCanDrive = false }
+      local along = p.hdg or math.random() * 2 * math.pi   -- entlang der Bahn versetzen, bleibt neben der Bahn
+      if math.random() < 0.5 then along = along + math.pi end
+      local names = {}
+      for i, def in ipairs(c.groups) do
+        local gname = spawnAdGroup(base, p, along, def, i)
+        if gname then names[#names + 1] = gname end
       end
-      D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units })
-      local g = Group.getByName(gname)
-      if g and g:isExist() then
-        patriotOptions(gname)
-        -- direkt nach dem Spawn gesetzte Optionen greifen nicht immer: nach 2 s erneut
-        timer.scheduleFunction(safe(function() patriotOptions(gname) end, "Patriot"), nil, timer.getTime() + 2)
-        env.info(string.format("DynSEAD: Patriot at %s (%s), elevation %d m", base.name or "?", gname, land.getHeight(p)))
-        return gname
-      end
+      if #names > 0 then return names end
     end
   end
   return nil
+end
+
+local function groupsAlive(list)
+  local n = 0
+  for _, g in ipairs(list or {}) do n = n + groupAliveCount(g) end
+  return n
 end
 
 -- frontnächste eigene Plätze (Abstand zur nächsten aktiven AO, ohne AO zum nächsten roten Platz)
@@ -2986,24 +3019,24 @@ function D.patriotTick(now)
   -- abbauen: Plätze, die nicht mehr frontnah oder nicht mehr blau sind
   for name, pt in pairs(D.patriots) do
     if not want[name] then
-      if pt.group then destroyGroup(pt.group) end
+      for _, g in ipairs(pt.groups or {}) do destroyGroup(g) end
       D.patriots[name] = nil
     end
   end
   -- aufbauen bzw. nach Verlust wieder aufbauen
   for name, b in pairs(want) do
     local pt = D.patriots[name]
-    if pt and pt.group and groupAliveCount(pt.group) == 0 then
-      destroyGroup(pt.group)
-      pt.group, pt.retry = nil, now + c.respawnDelay
-      msg(string.format("%s: Patriot battery at %s destroyed – replacement in %d min.",
-        D.cfg.awacs.callsignName, name, math.floor(c.respawnDelay / 60)))
+    if pt and pt.groups and groupsAlive(pt.groups) == 0 then
+      for _, g in ipairs(pt.groups) do destroyGroup(g) end
+      pt.groups, pt.retry = nil, now + c.respawnDelay
+      msg(string.format("%s: %s air defense site at %s destroyed – replacement in %d min.",
+        D.cfg.awacs.callsignName, c.label or "SAM", name, math.floor(c.respawnDelay / 60)))
     end
     if not pt then pt = {}; D.patriots[name] = pt end
-    if pt.group then patriotOptions(pt.group) end
-    if not pt.group and now >= (pt.retry or 0) then
-      pt.group = spawnPatriot(b)
-      if not pt.group then pt.retry = now + 600 end
+    for _, g in ipairs(pt.groups or {}) do patriotOptions(g) end
+    if not pt.groups and now >= (pt.retry or 0) then
+      pt.groups = spawnPatriot(b)
+      if not pt.groups then pt.retry = now + 600 end
     end
   end
 end
@@ -6230,12 +6263,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.72 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.73 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.72 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.73 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
