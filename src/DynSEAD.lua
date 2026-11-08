@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.72 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.74 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -472,8 +472,17 @@ D.cfg = {
     -- Straßennähe: Wälder lassen sich in DCS nicht abfragen, an Straßen und Feldwegen ist das Gelände meist offen.
     -- SAM-Stellungen werden daher (im ersten Durchlauf) an eine Stelle roadDist m neben die nächste Straße verschoben.
     nearRoad       = true,
-    roadDist       = {60, 250},    -- Abstand zur Straße (m): nicht direkt auf der Straße, aber nah dran
+    roadDist       = {5, 25},      -- Abstand zur Straße (m); v4.74: vorher 60–250 m, dort stand oft schon Wald
     roadMaxShift   = 6000,         -- weiter als so viele m wird ein Standort für die Straßennähe nicht verschoben
+    -- v4.74 (Nutzer: „im Wald spawnen ist ein Riesenproblem, ebenso in Gebäuden“): DCS kann Wald nicht abfragen, auf der
+    -- Fahrbahn wachsen aber keine Bäume. Jede stehende Bodengruppe (ohne Route, nicht ausgenommen) wird daher entlang der
+    -- nächsten Straße aufgereiht (D.addGround -> D.roadLine): Fahrzeuge im Abstand roadSpacing auf der Fahrbahn, keine Stelle
+    -- mit Gebäuden/Brücken im Umkreis buildingRadius. Liegt keine Straße innerhalb roadSnapMax, bleibt die Aufstellung,
+    -- aber Fahrzeuge in/an Gebäuden werden bis zu 60 m verschoben.
+    roadSnap       = true,
+    roadSnapMax    = 3000,
+    roadSpacing    = 35,
+    buildingRadius = 18,
   },
 
   fortress = {
@@ -624,16 +633,24 @@ D.cfg = {
     interceptDist = 90000,         -- nur falls kein Platz passt: Luftstart so weit von der C-130 Richtung Feindgebiet
   },
 
-  -- Patriot-Batterien auf eigenen Flugplätzen: nur an den maxSites frontnächsten Plätzen (Leistung), rücken mit der
-  -- Front vor (Batterien an Plätzen weit hinten werden abgebaut); zerstörte Batterien kommen nach respawnDelay wieder
+  -- Flugabwehr auf eigenen Flugplätzen (Name bluePatriot historisch): nur an den maxSites frontnächsten Plätzen (Leistung),
+  -- rücken mit der Front vor (Stellungen an Plätzen weit hinten werden abgebaut); zerstörte Stellungen kommen nach respawnDelay wieder
   bluePatriot = {
     enabled      = true,
     maxSites     = 4,
     dist         = {1200, 3000},   -- Abstand der Stellung zur Platzmitte (m)
     respawnDelay = 1800,
     checkInterval = 60,
-    units = { "Patriot str", "Patriot ECS", "Patriot cp", "Patriot EPP", "Patriot AMG",
-              "Patriot ln", "Patriot ln", "Patriot ln", "Patriot ln" },
+    -- v4.73 (Nutzer: „Patriot hat zu viel Reichweite – Hawks, als SHORAD NASAMS dazu, gemischt an einem Spot“):
+    -- je Platz eine Stellung aus mehreren Gruppen; launcher = Typ der Startgeräte (im Kreis um die Gruppenmitte),
+    -- shift = Versatz der Gruppenmitte entlang der Startbahn (m); Stellung gilt erst als zerstört, wenn alle Gruppen tot sind
+    label  = "Hawk/NASAMS",
+    groups = {
+      { prefix = "HAWK",   launcher = "Hawk ln",     shift = 0,
+        units = { "Hawk sr", "Hawk tr", "Hawk cwar", "Hawk pcp", "Hawk ln", "Hawk ln", "Hawk ln" } },
+      { prefix = "NASAMS", launcher = "NASAMS_LN_C", shift = 220,
+        units = { "NASAMS_Radar_MPQ64F1", "NASAMS_Command_Post", "NASAMS_LN_C", "NASAMS_LN_C" } },
+    },
     -- v4.70 (Nutzer: „Patriots ignorieren Feindflieger in 20 NM“): Standort mit freiem Horizont
     -- (D.samSpotClear: Hangneigung, Berge, Bebauung) und unter den Kandidaten der höchstgelegene;
     -- Waffen frei, volle Einsatzreichweite, kein Ausweichen bei Beschuss, Optionen werden bei jeder Prüfung erneuert
@@ -930,7 +947,96 @@ local function groupAliveCount(gname)
 end
 
 -- Bodengruppen so vollständig wie Editor-Gruppen anlegen (Gruppen-x/y, Startwegpunkt, Editor-Felder).
+-- Steht hier ein Gebäude/Szenerie-Objekt (Gebäude, Brücke, Mast) im Umkreis r?
+local function sceneryAt(p, r)
+  local found = false
+  pcall(function()
+    world.searchObjects(Object.Category.SCENERY,
+      { id = world.VolumeType.SPHERE, params = { point = { x = p.x, y = land.getHeight(p), z = p.y }, radius = r } },
+      function() found = true return false end)
+  end)
+  return found
+end
+
+local function roadPoint(p)
+  local ok, x, y = pcall(land.getClosestPointOnRoads, "roads", p.x, p.y)
+  if ok and type(x) == "number" and type(y) == "number" then return { x = x, y = y } end
+  return nil
+end
+
+-- n Punkte auf der Fahrbahn der nächsten Straße um c (in beide Richtungen der Straße entlang, folgt Kurven);
+-- nil, wenn keine Straße nah genug ist oder die Straße zu kurz ist
+function D.roadLine(c, n, spacing, maxShift)
+  local cfg = D.cfg.siting
+  local r = roadPoint(c)
+  if not r or math.sqrt((r.x - c.x) ^ 2 + (r.y - c.y) ^ 2) > maxShift then return nil end
+  local function d2(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2) end
+  -- Straßenrichtung: in welcher Richtung führt die Fahrbahn am weitesten weg
+  local bestH, bestD
+  for k = 0, 7 do
+    local h = k * math.pi / 4
+    local q = roadPoint({ x = r.x + spacing * math.cos(h), y = r.y + spacing * math.sin(h) })
+    if q then
+      local d = d2(r, q)
+      if not bestD or d > bestD then bestD, bestH = d, math.atan2(q.y - r.y, q.x - r.x) end
+    end
+  end
+  if not bestH or bestD < spacing * 0.5 then return nil end
+  local pts = {}
+  local function free(q)
+    for _, o in ipairs(pts) do if d2(o, q) < spacing * 0.6 then return false end end
+    return not sceneryAt(q, cfg.buildingRadius)
+  end
+  if free(r) then pts[1] = { x = r.x, y = r.y, hdg = bestH } end
+  local ends = { { p = r, h = bestH, on = true }, { p = r, h = bestH + math.pi, on = true } }
+  for step = 1, n * 8 do
+    if #pts >= n or not (ends[1].on or ends[2].on) then break end
+    local e = ends[step % 2 + 1]
+    if e.on then
+      local q = roadPoint({ x = e.p.x + spacing * math.cos(e.h), y = e.p.y + spacing * math.sin(e.h) })
+      if not q or d2(q, e.p) < spacing * 0.5 then
+        e.on = false                                   -- Straßenende oder Sackgasse
+      else
+        e.h, e.p = math.atan2(q.y - e.p.y, q.x - e.p.x), q
+        if free(q) then pts[#pts + 1] = { x = q.x, y = q.y, hdg = e.h } end
+      end
+    end
+  end
+  if #pts < n then return nil end
+  return pts
+end
+
+-- Aufstellung einer stehenden Gruppe: auf die Straße (kein Wald) oder wenigstens aus Gebäuden heraus
+local function placeClear(data)
+  local cfg = D.cfg.siting
+  local units = data.units
+  if not cfg or not cfg.roadSnap or data.noSnap or data.route or not units or #units == 0 then return end
+  local cx, cy = 0, 0
+  for _, u in ipairs(units) do cx, cy = cx + u.x, cy + u.y end
+  local c = { x = cx / #units, y = cy / #units }
+  local pts = D.roadLine(c, #units, cfg.roadSpacing, cfg.roadSnapMax)
+  if pts then
+    -- Reihenfolge beibehalten: erste Einheit (meist Radar/Gefechtsstand) in die Mitte der Reihe
+    for i, u in ipairs(units) do
+      u.x, u.y, u.heading = pts[i].x, pts[i].y, pts[i].hdg
+    end
+    D.placement.road = D.placement.road + 1
+    return
+  end
+  D.placement.free = D.placement.free + 1
+  for _, u in ipairs(units) do
+    if sceneryAt(u, cfg.buildingRadius) then
+      for k = 1, 12 do
+        local q = { x = u.x + 60 * math.cos(k * 0.52), y = u.y + 60 * math.sin(k * 0.52) }
+        if okGround(q) and not sceneryAt(q, cfg.buildingRadius) then u.x, u.y = q.x, q.y break end
+      end
+    end
+  end
+end
+D.placement = { road = 0, free = 0 }
+
 function D.addGround(country, data)
+  placeClear(data)
   local u1 = data.units and data.units[1]
   if u1 then
     data.x = data.x or u1.x
@@ -1544,9 +1650,9 @@ function D.createSam(ao, key, p, forceMode)
     end
   end, "Radar"), nil, now + 3)
 
-  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
+  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s; groups on roads %d, off-road (no road near) %d",
     key, D.siting.tested, D.siting.scenery, D.siting.urban, D.siting.slope, D.siting.horizon, D.siting.zone,
-    D.siting.apiFailed and " (scenery search unavailable)" or ""))
+    D.siting.apiFailed and " (scenery search unavailable)" or "", D.placement.road, D.placement.free))
   return true
 end
 
@@ -2902,7 +3008,7 @@ local function patriotRunwaySpots(base)
           if not ok then break end
           if sp.vTerminalPos and dist(p, toV2(sp.vTerminalPos)) < c.parkingClear then ok = false end
         end
-        if ok then out[#out + 1] = p end
+        if ok then p.hdg = hdg; out[#out + 1] = p end
       end
     end
   end
@@ -2932,36 +3038,61 @@ local function patriotSpot(base)
   return best
 end
 
+local function spawnAdGroup(base, p, along, def, idx)
+  local c = D.cfg.bluePatriot
+  local gp = offset(p, along, def.shift or 0)
+  if (def.shift or 0) ~= 0 and not okGround(gp) then gp = p end
+  local gname = nextId(def.prefix or "AD")
+  local hdg = math.random() * 2 * math.pi
+  local nl = 0
+  for _, t in ipairs(def.units) do if t == def.launcher then nl = nl + 1 end end
+  local units, li, oi = {}, 0, 0
+  for i, t in ipairs(def.units) do
+    local o
+    if t == def.launcher then
+      li = li + 1
+      o = offset(gp, hdg + li * 2 * math.pi / math.max(nl, 1), c.launcherRadius or 70)  -- Startgeräte im Kreis
+    else
+      oi = oi + 1
+      o = offset(gp, hdg + math.pi, 25 * oi)              -- Radare und Gefechtsstand in einer Reihe
+    end
+    units[#units + 1] = { name = gname .. "-" .. i, type = t, x = o.x, y = o.y, heading = hdg,
+                          skill = "Excellent", playerCanDrive = false }
+  end
+  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units, noSnap = true })
+  local g = Group.getByName(gname)
+  if not (g and g:isExist()) then return nil end
+  patriotOptions(gname)
+  -- direkt nach dem Spawn gesetzte Optionen greifen nicht immer: nach 2 s erneut
+  timer.scheduleFunction(safe(function() patriotOptions(gname) end, "AirDefense"), nil, timer.getTime() + 2)
+  env.info(string.format("DynSEAD: air defense %s at %s (%s), elevation %d m", def.prefix or "?", base.name or "?",
+    gname, land.getHeight(gp)))
+  return gname
+end
+
+-- eine Stellung aus allen Gruppen von cfg.bluePatriot.groups an einem Standort; liefert die Liste der Gruppennamen
 local function spawnPatriot(base)
   local c = D.cfg.bluePatriot
   for _ = 1, 3 do
     local p = patriotSpot(base)
     if p then
-      local gname = nextId("PATRIOT")
-      local hdg = math.random() * 2 * math.pi
-      local units = {}
-      for i, t in ipairs(c.units) do
-        local o
-        if t == "Patriot ln" then
-          o = offset(p, hdg + (i - 6) * math.pi / 2, c.launcherRadius or 70)      -- Startgeräte im Kreis um die Stellung
-        else
-          o = offset(p, hdg + math.pi, 25 * i)                 -- Radar, Gefechtsstand, Strom, Antenne in einer Reihe
-        end
-        units[#units + 1] = { name = gname .. "-" .. i, type = t, x = o.x, y = o.y, heading = hdg,
-                              skill = "Excellent", playerCanDrive = false }
+      local along = p.hdg or math.random() * 2 * math.pi   -- entlang der Bahn versetzen, bleibt neben der Bahn
+      if math.random() < 0.5 then along = along + math.pi end
+      local names = {}
+      for i, def in ipairs(c.groups) do
+        local gname = spawnAdGroup(base, p, along, def, i)
+        if gname then names[#names + 1] = gname end
       end
-      D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units })
-      local g = Group.getByName(gname)
-      if g and g:isExist() then
-        patriotOptions(gname)
-        -- direkt nach dem Spawn gesetzte Optionen greifen nicht immer: nach 2 s erneut
-        timer.scheduleFunction(safe(function() patriotOptions(gname) end, "Patriot"), nil, timer.getTime() + 2)
-        env.info(string.format("DynSEAD: Patriot at %s (%s), elevation %d m", base.name or "?", gname, land.getHeight(p)))
-        return gname
-      end
+      if #names > 0 then return names end
     end
   end
   return nil
+end
+
+local function groupsAlive(list)
+  local n = 0
+  for _, g in ipairs(list or {}) do n = n + groupAliveCount(g) end
+  return n
 end
 
 -- frontnächste eigene Plätze (Abstand zur nächsten aktiven AO, ohne AO zum nächsten roten Platz)
@@ -2986,24 +3117,24 @@ function D.patriotTick(now)
   -- abbauen: Plätze, die nicht mehr frontnah oder nicht mehr blau sind
   for name, pt in pairs(D.patriots) do
     if not want[name] then
-      if pt.group then destroyGroup(pt.group) end
+      for _, g in ipairs(pt.groups or {}) do destroyGroup(g) end
       D.patriots[name] = nil
     end
   end
   -- aufbauen bzw. nach Verlust wieder aufbauen
   for name, b in pairs(want) do
     local pt = D.patriots[name]
-    if pt and pt.group and groupAliveCount(pt.group) == 0 then
-      destroyGroup(pt.group)
-      pt.group, pt.retry = nil, now + c.respawnDelay
-      msg(string.format("%s: Patriot battery at %s destroyed – replacement in %d min.",
-        D.cfg.awacs.callsignName, name, math.floor(c.respawnDelay / 60)))
+    if pt and pt.groups and groupsAlive(pt.groups) == 0 then
+      for _, g in ipairs(pt.groups) do destroyGroup(g) end
+      pt.groups, pt.retry = nil, now + c.respawnDelay
+      msg(string.format("%s: %s air defense site at %s destroyed – replacement in %d min.",
+        D.cfg.awacs.callsignName, c.label or "SAM", name, math.floor(c.respawnDelay / 60)))
     end
     if not pt then pt = {}; D.patriots[name] = pt end
-    if pt.group then patriotOptions(pt.group) end
-    if not pt.group and now >= (pt.retry or 0) then
-      pt.group = spawnPatriot(b)
-      if not pt.group then pt.retry = now + 600 end
+    for _, g in ipairs(pt.groups or {}) do patriotOptions(g) end
+    if not pt.groups and now >= (pt.retry or 0) then
+      pt.groups = spawnPatriot(b)
+      if not pt.groups then pt.retry = now + 600 end
     end
   end
 end
@@ -3409,7 +3540,7 @@ function D.spawnCsar(p, name, force)
   if #D.csars >= c.maxActive and not force then return false end
   if not okGround(p) then return false end
   local gname = nextId("CSAR")
-  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = {
+  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, noSnap = true, units = {
     { name = gname .. "-1", type = "Soldier M4", x = p.x, y = p.y, heading = 0, skill = "Average", playerCanDrive = false } } })
   local cs = { group = gname, pos = p, name = name, enemies = {}, spawned = timer.getTime(), nextSmoke = 0 }
   for _ = 1, math.random(c.enemyGroups[1], c.enemyGroups[2]) do
@@ -6230,12 +6361,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.72 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.74 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.72 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.74 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
