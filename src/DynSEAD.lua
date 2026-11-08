@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.75 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.76 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -1922,14 +1922,19 @@ local function awacsTasks(p1, p2)
   }
 end
 
--- Datenlink des AWACS einschalten (EPLRS-Befehl; die Gruppen-ID verbindet ihn mit dem Link-16-Netz der Koalition)
-function D.awacsDatalink()
-  local cfg = D.cfg.awacs
-  if not cfg.datalink then return end
-  local g = Group.getByName(cfg.groupName)
+-- Datenlink einer KI-Gruppe einschalten (EPLRS-Befehl, wie ihn der Editor bei AWACS/Tankern in Wegpunkt 0 setzt):
+-- die Gruppe wird Teilnehmer im Link-16-Netz der Koalition und erscheint bei den Spielern als Freund statt als Unbekannt
+function D.enableDatalink(gname)
+  local g = Group.getByName(gname)
   if not (g and g:isExist()) then return end
   local c = g:getController()
   pcall(function() c:setCommand({ id = "EPLRS", params = { value = true, groupId = g:getID() } }) end)
+end
+
+function D.awacsDatalink()
+  local cfg = D.cfg.awacs
+  if not cfg.datalink then return end
+  D.enableDatalink(cfg.groupName)
 end
 
 function D.spawnAwacs()
@@ -2170,6 +2175,8 @@ function D.spawnTanker(t)
       ctrl:setCommand({ id = "SetImmortal", params = { value = true } })
       ctrl:setCommand({ id = "SetInvisible", params = { value = true } })
     end
+    -- v4.76 (Nutzertest: Tanker und AWACS erschienen im F-16-Radar gelb als „unbekannt“): Datenlink an
+    D.enableDatalink(t.name)
   end, "Tanker"), nil, timer.getTime() + 3)
 
   t.spawned = true
@@ -2202,8 +2209,11 @@ end
 function D.checkTankers(now)
   local cfg = D.cfg.tankers
   if not cfg.enabled then return end
+  local refreshDl = now >= (D.nextTankerDatalink or 0)
+  if refreshDl then D.nextTankerDatalink = now + 60 end
   for _, t in ipairs(cfg.list) do
     local u = supportUnit(t.name)
+    if u and refreshDl then D.enableDatalink(t.name) end
     local relieved = false
     if u and u:inAir() and now >= (t.grace or 0) and needsRelief(u) then
       -- wenig Sprit: sofort ablösen, bevor er die Station verlässt
@@ -6382,12 +6392,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.75 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.76 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.75 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.76 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
