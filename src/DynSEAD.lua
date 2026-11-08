@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.79 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.80 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -3254,7 +3254,9 @@ end
 local function spawnAdGroup(base, p, along, def, idx, pts)
   local c = D.cfg.bluePatriot
   local gp = pts and pts[1] or offset(p, along, def.shift or 0)
-  if (def.shift or 0) ~= 0 and not okGround(gp) then gp = p end
+  -- v4.80: bei der Reihe neben der Bahn (pts) kein Versatz – vorher wurde gp hier nil (okGround scheitert nahe Bahnen)
+  -- und der Spawn der NASAMS-Gruppe brach mit einem Fehler ab
+  if not pts and (def.shift or 0) ~= 0 and not okGround(gp) then gp = p end
   local gname = nextId(def.prefix or "AD")
   local hdg = math.random() * 2 * math.pi
   local nl = 0
@@ -3282,7 +3284,7 @@ local function spawnAdGroup(base, p, along, def, idx, pts)
   -- direkt nach dem Spawn gesetzte Optionen greifen nicht immer: nach 2 s erneut
   timer.scheduleFunction(safe(function() patriotOptions(gname) end, "AirDefense"), nil, timer.getTime() + 2)
   env.info(string.format("DynSEAD: air defense %s at %s (%s), elevation %d m", def.prefix or "?", base.name or "?",
-    gname, land.getHeight(gp)))
+    gname, gp and land.getHeight(gp) or 0))
   return gname
 end
 
@@ -3294,8 +3296,9 @@ local function spawnPatriot(base)
   if line then
     local names = {}
     for i, def in ipairs(c.groups) do
-      local gname = spawnAdGroup(base, nil, nil, def, i, line[i])
-      if gname then names[#names + 1] = gname end
+      local ok, gname = pcall(spawnAdGroup, base, nil, nil, def, i, line[i])
+      if not ok then env.error("DynSEAD: air defense " .. tostring(def.prefix) .. " at " .. tostring(base.name) .. " failed: " .. tostring(gname)) end
+      if ok and gname then names[#names + 1] = gname end
     end
     if #names > 0 then return names end
   end
@@ -3306,8 +3309,9 @@ local function spawnPatriot(base)
       if math.random() < 0.5 then along = along + math.pi end
       local names = {}
       for i, def in ipairs(c.groups) do
-        local gname = spawnAdGroup(base, p, along, def, i)
-        if gname then names[#names + 1] = gname end
+        local ok, gname = pcall(spawnAdGroup, base, p, along, def, i)
+        if not ok then env.error("DynSEAD: air defense " .. tostring(def.prefix) .. " at " .. tostring(base.name) .. " failed: " .. tostring(gname)) end
+        if ok and gname then names[#names + 1] = gname end
       end
       if #names > 0 then return names end
     end
@@ -6587,12 +6591,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.79 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.80 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.79 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.80 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
