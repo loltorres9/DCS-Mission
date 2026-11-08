@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.79 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.82 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -490,6 +490,9 @@ D.cfg = {
     airfieldSnap    = 3000,
     airfieldSpacing = 30,
     airfieldMinSep  = 20,
+    -- v4.81: Abstellplätze nicht mehr belegen – Fahrzeuge dort versperrten die Rollwege, KI-Flugzeuge (Abfangjäger, CAP)
+    -- blieben auf ihren Parking Spots stehen; nur noch die Grasstreifen zwischen Bahn und Rollweg
+    airfieldParking = false,
     roadSpacing    = 35,
     buildingRadius = 18,
   },
@@ -640,6 +643,11 @@ D.cfg = {
     interceptBase = { 40000, 300000 },  -- Abfangjäger starten von der Startbahn des roten Platzes, der der Reststrecke am
                                         -- nächsten ist (mind. 40 km von blauen Basen, max. 300 km von der C-130)
     interceptDist = 90000,         -- nur falls kein Platz passt: Luftstart so weit von der C-130 Richtung Feindgebiet
+    -- v4.81 (Nutzer: „Abfangjäger heben nicht ab – gespawnt, Triebwerke laufen, bleiben auf den Parking Spots“):
+    -- ist nach stuckTimeout s noch keiner in der Luft, wird die Gruppe durch einen Luftstart knapp über dem Platz ersetzt
+    -- (Richtung C-130, scrambleAlt m über Grund)
+    stuckTimeout  = 120,
+    scrambleAlt   = 600,
   },
 
   -- Flugabwehr auf eigenen Flugplätzen (Name bluePatriot historisch): nur an den maxSites frontnächsten Plätzen (Leistung),
@@ -1032,6 +1040,34 @@ local function surfaceOk(p)
   return st == land.SurfaceType.LAND
 end
 
+-- v4.82 (Nutzer: Abfangjäger erschienen auf den Parking Spots statt „direkt auf der Startbahn“): Startpunkt am
+-- Bahnanfang derjenigen Bahn/Richtung, die am besten zum Ziel zeigt; nil ohne Bahndaten
+local function runwayStart(ab, towards)
+  local okR, rws = pcall(function() return ab:getRunways() end)
+  if not okR or type(rws) ~= "table" then return nil end
+  local want = towards and math.atan2(towards.y - ab:getPoint().z, towards.x - ab:getPoint().x)
+  local best, bestDiff
+  for _, rw in ipairs(rws) do
+    if rw.position and rw.course and rw.length then
+      for _, h in ipairs({ -rw.course, -rw.course + math.pi }) do
+        local diff = want and math.abs(math.atan2(math.sin(h - want), math.cos(h - want))) or math.random()
+        if not bestDiff or diff < bestDiff then
+          local mid = toV2(rw.position)
+          local p = offset(mid, h + math.pi, rw.length / 2 - 150)   -- 150 m hinter der Schwelle auf der Bahn
+          best, bestDiff = { x = p.x, y = p.y, hdg = h }, diff
+        end
+      end
+    end
+  end
+  return best
+end
+
+-- Aufstellung eines Schwarms auf der Bahn: Führer am Startpunkt, Flügelmänner versetzt dahinter
+local function runwaySlot(rs, i)
+  local q = offset(rs, rs.hdg + math.pi, 60 * (i - 1))
+  return offset(q, rs.hdg + math.pi / 2, (i % 2 == 0) and 12 or -12)
+end
+
 -- eben genug für ein Fahrzeug (okGround prüft 250 m weit und lehnt Punkte nahe Bahnen ab – hier nur 30 m)
 local function flatAt(p)
   local h = land.getHeight(p)
@@ -1074,7 +1110,8 @@ local function airfieldPool(ab)
     end
   end
   local okP, park = pcall(function() return ab:getParking() end)
-  if okP and type(park) == "table" then
+  park = (okP and type(park) == "table") and park or {}
+  if cfg.airfieldParking then
     for _, sp in ipairs(park) do
       if sp.vTerminalPos then add(toV2(sp.vTerminalPos)) end
     end
@@ -1089,7 +1126,14 @@ local function airfieldPool(ab)
           for i = 0, n do
             local along = -rw.length * 0.4 + i * cfg.airfieldSpacing
             local lat = taxiMiddle(mid, hdg, along, side, rw.width)
-            if lat then add(offset(offset(mid, hdg, along), hdg + math.pi / 2, side * lat), hdg) end
+            if lat then
+              local q = offset(offset(mid, hdg, along), hdg + math.pi / 2, side * lat)
+              local nearPark = false
+              for _, sp in ipairs(park) do
+                if sp.vTerminalPos and dist(q, toV2(sp.vTerminalPos)) < 60 then nearPark = true break end
+              end
+              if not nearPark then add(q, hdg) end
+            end
           end
         end
       end
@@ -2841,14 +2885,16 @@ function D.spawnPersistentCAP()
   }
   local function build(ground)
     local gname = nextId("RCAP")
-    local start = ground and base.p or offset(center, hdg + math.pi, 30000)
+    local rs = ground and runwayStart(base.ab, center) or nil
+    local start = ground and (rs or base.p) or offset(center, hdg + math.pi, 30000)
     local units = {}
     for i = 1, cfg.size do
+      local up = rs and runwaySlot(rs, i) or { x = start.x - 30 * (i - 1), y = start.y + 30 * (i - 1) }
       units[i] = {
         name = gname .. "-" .. i, type = v.type,
-        x = start.x - 30 * (i - 1), y = start.y + 30 * (i - 1),
+        x = up.x, y = up.y,
         alt = ground and land.getHeight(start) or cfg.alt, alt_type = "BARO",
-        speed = ground and 0 or cfg.speed, heading = hdg, skill = td.skill or D.cfg.skill,
+        speed = ground and 0 or cfg.speed, heading = rs and rs.hdg or hdg, skill = td.skill or D.cfg.skill,
         payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil,
       }
     end
@@ -3254,7 +3300,9 @@ end
 local function spawnAdGroup(base, p, along, def, idx, pts)
   local c = D.cfg.bluePatriot
   local gp = pts and pts[1] or offset(p, along, def.shift or 0)
-  if (def.shift or 0) ~= 0 and not okGround(gp) then gp = p end
+  -- v4.80: bei der Reihe neben der Bahn (pts) kein Versatz – vorher wurde gp hier nil (okGround scheitert nahe Bahnen)
+  -- und der Spawn der NASAMS-Gruppe brach mit einem Fehler ab
+  if not pts and (def.shift or 0) ~= 0 and not okGround(gp) then gp = p end
   local gname = nextId(def.prefix or "AD")
   local hdg = math.random() * 2 * math.pi
   local nl = 0
@@ -3282,7 +3330,7 @@ local function spawnAdGroup(base, p, along, def, idx, pts)
   -- direkt nach dem Spawn gesetzte Optionen greifen nicht immer: nach 2 s erneut
   timer.scheduleFunction(safe(function() patriotOptions(gname) end, "AirDefense"), nil, timer.getTime() + 2)
   env.info(string.format("DynSEAD: air defense %s at %s (%s), elevation %d m", def.prefix or "?", base.name or "?",
-    gname, land.getHeight(gp)))
+    gname, gp and land.getHeight(gp) or 0))
   return gname
 end
 
@@ -3294,8 +3342,9 @@ local function spawnPatriot(base)
   if line then
     local names = {}
     for i, def in ipairs(c.groups) do
-      local gname = spawnAdGroup(base, nil, nil, def, i, line[i])
-      if gname then names[#names + 1] = gname end
+      local ok, gname = pcall(spawnAdGroup, base, nil, nil, def, i, line[i])
+      if not ok then env.error("DynSEAD: air defense " .. tostring(def.prefix) .. " at " .. tostring(base.name) .. " failed: " .. tostring(gname)) end
+      if ok and gname then names[#names + 1] = gname end
     end
     if #names > 0 then return names end
   end
@@ -3306,8 +3355,9 @@ local function spawnPatriot(base)
       if math.random() < 0.5 then along = along + math.pi end
       local names = {}
       for i, def in ipairs(c.groups) do
-        local gname = spawnAdGroup(base, p, along, def, i)
-        if gname then names[#names + 1] = gname end
+        local ok, gname = pcall(spawnAdGroup, base, p, along, def, i)
+        if not ok then env.error("DynSEAD: air defense " .. tostring(def.prefix) .. " at " .. tostring(base.name) .. " failed: " .. tostring(gname)) end
+        if ok and gname then names[#names + 1] = gname end
       end
       if #names > 0 then return names end
     end
@@ -3492,11 +3542,17 @@ local function escortIntercept(es, cp)
   local v = td.variants[math.random(#td.variants)]
   local lo = D.capLoadouts[v.loadout]
   local tasks = { escortEngageTask(es) }
-  local function build(ground)
+  local function build(ground, overBase)
     local gname = nextId("INT")
     local sp, dir
+    local rs
     if ground then
-      sp, dir = base.p, math.atan2(cp.y - base.p.y, cp.x - base.p.x)
+      rs = runwayStart(base.ab, cp)
+      sp, dir = rs or base.p, rs and rs.hdg or math.atan2(cp.y - base.p.y, cp.x - base.p.x)
+    elseif overBase then
+      -- Ersatz für hängengebliebene Bodenstarter: knapp über dem Platz in der Luft, Richtung C-130
+      dir = math.atan2(cp.y - base.p.y, cp.x - base.p.x)
+      sp = offset(base.p, dir, 2000)
     else
       local enemy
       for _, a in ipairs(redAirbases(0)) do
@@ -3508,9 +3564,11 @@ local function escortIntercept(es, cp)
     end
     local units = {}
     for i = 1, cap.size do
+      local up = rs and runwaySlot(rs, i) or { x = sp.x - (ground and 30 or 300) * (i - 1), y = sp.y + (ground and 30 or 300) * (i - 1) }
       units[i] = { name = gname .. "-" .. i, type = v.type,
-        x = sp.x - (ground and 30 or 300) * (i - 1), y = sp.y + (ground and 30 or 300) * (i - 1),
-        alt = ground and land.getHeight(sp) or cap.alt, alt_type = "BARO", speed = ground and 0 or cap.speed,
+        x = up.x, y = up.y,
+        alt = ground and land.getHeight(sp) or (overBase and land.getHeight(sp) + c.scrambleAlt) or cap.alt,
+        alt_type = "BARO", speed = ground and 0 or (overBase and cap.speed * 0.7) or cap.speed,
         heading = dir, skill = td.skill or D.cfg.skill,
         payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil }
     end
@@ -3542,6 +3600,11 @@ local function escortIntercept(es, cp)
   if not gname then ground = false; gname, sp = build(false) end
   if not gname then return end
   es.interceptors[#es.interceptors + 1] = gname
+  if ground then
+    -- Bodenstart überwachen (D.escortTick): hebt nach stuckTimeout keiner ab, Luftstart über dem Platz
+    es.scramble = es.scramble or {}
+    es.scramble[gname] = { t = timer.getTime(), rebuild = function() return build(false, true) end }
+  end
   if ground then
     msg(string.format("%s: Hostile interceptors – %dx %s – scrambling from %s toward %s!",
       D.cfg.awacs.callsignName, cap.size, v.type, base.ab:getName(), es.callsign))
@@ -3614,14 +3677,23 @@ function D.escortTick(now)
       es.wave = es.wave + 1
     end
     -- Abfangjäger: einmalig nach dem Abheben (bzw. sofort bei Luftstart) gezielt auf die C-130 ansetzen
-    for _, n in ipairs(es.interceptors) do
+    for i, n in ipairs(es.interceptors) do
       local g = Group.getByName(n)
       if g and g:isExist() and not es.engaged[n] then
         local up = false
         for _, iu in ipairs(g:getUnits() or {}) do if iu:isExist() and iu:inAir() then up = true end end
+        local sc = es.scramble and es.scramble[n]
         if up then
           es.engaged[n] = true
+          if sc then es.scramble[n] = nil end
           g:getController():pushTask(escortEngageTask(es))
+        elseif sc and now - sc.t >= D.cfg.escort.stuckTimeout then
+          -- hängt am Boden (Rollweg blockiert, Startfreigabe …): durch Luftstart über dem Platz ersetzen
+          es.scramble[n] = nil
+          destroyGroup(n)
+          local ok, nn = pcall(sc.rebuild)
+          env.info("DynSEAD: interceptors " .. n .. " stuck on the ground – replaced by air start " .. tostring(ok and nn))
+          es.interceptors[i] = (ok and nn) or n
         end
       end
     end
@@ -6587,12 +6659,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.79 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.82 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.79 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.82 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
