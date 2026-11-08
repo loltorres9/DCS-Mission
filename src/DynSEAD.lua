@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.74 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.75 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -256,6 +256,9 @@ D.cfg = {
     -- v4.71 (Nutzer: „E-3 verliert Treibstoff und landet“): bei weniger als reliefFuel (Anteil) Tank oder
     -- wenn er gelandet ist, wird er sofort durch eine frische Maschine auf Station abgelöst (gilt auch für Tanker)
     reliefFuel    = 0.3,
+    -- v4.75 (Nutzer: „sicherstellen, dass der AWACS Datalink sendet“): Datenlink (EPLRS/Link 16) nach jedem Spawn
+    -- und jeder Verlegung einschalten und alle 60 s erneuern; AWACS-Aufgabe gilt ab dem ersten Wegpunkt (auch beim Verlegen)
+    datalink      = true,
   },
 
   -- Sprachausgabe von Overlord aus vorproduzierten WAV-Bausteinen (ohne SRS)
@@ -1919,6 +1922,16 @@ local function awacsTasks(p1, p2)
   }
 end
 
+-- Datenlink des AWACS einschalten (EPLRS-Befehl; die Gruppen-ID verbindet ihn mit dem Link-16-Netz der Koalition)
+function D.awacsDatalink()
+  local cfg = D.cfg.awacs
+  if not cfg.datalink then return end
+  local g = Group.getByName(cfg.groupName)
+  if not (g and g:isExist()) then return end
+  local c = g:getController()
+  pcall(function() c:setCommand({ id = "EPLRS", params = { value = true, groupId = g:getID() } }) end)
+end
+
 function D.spawnAwacs()
   local cfg = D.cfg.awacs
   local p1, p2 = D.awacsOrbit()
@@ -1948,6 +1961,7 @@ function D.spawnAwacs()
       end
     end, "AWACS"), nil, timer.getTime() + 2)
   end
+  timer.scheduleFunction(safe(function() D.awacsDatalink() end, "AWACS"), nil, timer.getTime() + 3)
 
   D.awacsSpawned = true
   msg(string.format("%s is on station. %.3f AM.", cfg.callsignName, cfg.frequency))
@@ -1962,11 +1976,14 @@ function D.repositionAwacs()
   if not p1 then return end
   local cfg = D.cfg.awacs
   local cur = toV2(u:getPoint())
+  -- AWACS-Aufgabe schon ab der aktuellen Position (sonst ist er auf dem Weg zur neuen Station kein AWACS);
+  -- der Racetrack-Orbit führt ihn selbst zur neuen Station
   u:getGroup():getController():setTask({ id = "Mission", params = { route = { points = {
-    airWP(cur, cfg.alt, cfg.speed, {}),
-    airWP(p1, cfg.alt, cfg.speed, awacsTasks(p1, p2)),
+    airWP(cur, cfg.alt, cfg.speed, awacsTasks(p1, p2)),
+    airWP(p1, cfg.alt, cfg.speed, {}),
     airWP(p2, cfg.alt, cfg.speed, {}),
   } } } })
+  timer.scheduleFunction(safe(function() D.awacsDatalink() end, "AWACS"), nil, timer.getTime() + 2)
   msg(cfg.callsignName .. " is repositioning to support the new AO.")
 end
 
@@ -1982,6 +1999,10 @@ function D.checkAwacs(now)
   local cfg = D.cfg.awacs
   if not cfg.enabled then return end
   local u = D.awacsUnit()
+  if u and now >= (D.nextDatalink or 0) then
+    D.nextDatalink = now + 60
+    D.awacsDatalink()
+  end
   if u and not D.awacsRespawnAt and now >= (D.awacsGrace or 0) and needsRelief(u) then
     env.info("DynSEAD: AWACS relieved (low fuel or landed)")
     destroyGroup(cfg.groupName)
@@ -6361,12 +6382,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.74 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.75 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.74 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.75 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
