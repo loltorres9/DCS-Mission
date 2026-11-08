@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.81 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.82 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -1038,6 +1038,34 @@ end
 local function surfaceOk(p)
   local st = land.getSurfaceType(p)
   return st == land.SurfaceType.LAND
+end
+
+-- v4.82 (Nutzer: Abfangjäger erschienen auf den Parking Spots statt „direkt auf der Startbahn“): Startpunkt am
+-- Bahnanfang derjenigen Bahn/Richtung, die am besten zum Ziel zeigt; nil ohne Bahndaten
+local function runwayStart(ab, towards)
+  local okR, rws = pcall(function() return ab:getRunways() end)
+  if not okR or type(rws) ~= "table" then return nil end
+  local want = towards and math.atan2(towards.y - ab:getPoint().z, towards.x - ab:getPoint().x)
+  local best, bestDiff
+  for _, rw in ipairs(rws) do
+    if rw.position and rw.course and rw.length then
+      for _, h in ipairs({ -rw.course, -rw.course + math.pi }) do
+        local diff = want and math.abs(math.atan2(math.sin(h - want), math.cos(h - want))) or math.random()
+        if not bestDiff or diff < bestDiff then
+          local mid = toV2(rw.position)
+          local p = offset(mid, h + math.pi, rw.length / 2 - 150)   -- 150 m hinter der Schwelle auf der Bahn
+          best, bestDiff = { x = p.x, y = p.y, hdg = h }, diff
+        end
+      end
+    end
+  end
+  return best
+end
+
+-- Aufstellung eines Schwarms auf der Bahn: Führer am Startpunkt, Flügelmänner versetzt dahinter
+local function runwaySlot(rs, i)
+  local q = offset(rs, rs.hdg + math.pi, 60 * (i - 1))
+  return offset(q, rs.hdg + math.pi / 2, (i % 2 == 0) and 12 or -12)
 end
 
 -- eben genug für ein Fahrzeug (okGround prüft 250 m weit und lehnt Punkte nahe Bahnen ab – hier nur 30 m)
@@ -2857,14 +2885,16 @@ function D.spawnPersistentCAP()
   }
   local function build(ground)
     local gname = nextId("RCAP")
-    local start = ground and base.p or offset(center, hdg + math.pi, 30000)
+    local rs = ground and runwayStart(base.ab, center) or nil
+    local start = ground and (rs or base.p) or offset(center, hdg + math.pi, 30000)
     local units = {}
     for i = 1, cfg.size do
+      local up = rs and runwaySlot(rs, i) or { x = start.x - 30 * (i - 1), y = start.y + 30 * (i - 1) }
       units[i] = {
         name = gname .. "-" .. i, type = v.type,
-        x = start.x - 30 * (i - 1), y = start.y + 30 * (i - 1),
+        x = up.x, y = up.y,
         alt = ground and land.getHeight(start) or cfg.alt, alt_type = "BARO",
-        speed = ground and 0 or cfg.speed, heading = hdg, skill = td.skill or D.cfg.skill,
+        speed = ground and 0 or cfg.speed, heading = rs and rs.hdg or hdg, skill = td.skill or D.cfg.skill,
         payload = lo and { pylons = lo.pylons, fuel = lo.fuel, flare = lo.flare, chaff = lo.chaff, gun = lo.gun } or nil,
       }
     end
@@ -3515,8 +3545,10 @@ local function escortIntercept(es, cp)
   local function build(ground, overBase)
     local gname = nextId("INT")
     local sp, dir
+    local rs
     if ground then
-      sp, dir = base.p, math.atan2(cp.y - base.p.y, cp.x - base.p.x)
+      rs = runwayStart(base.ab, cp)
+      sp, dir = rs or base.p, rs and rs.hdg or math.atan2(cp.y - base.p.y, cp.x - base.p.x)
     elseif overBase then
       -- Ersatz für hängengebliebene Bodenstarter: knapp über dem Platz in der Luft, Richtung C-130
       dir = math.atan2(cp.y - base.p.y, cp.x - base.p.x)
@@ -3532,8 +3564,9 @@ local function escortIntercept(es, cp)
     end
     local units = {}
     for i = 1, cap.size do
+      local up = rs and runwaySlot(rs, i) or { x = sp.x - (ground and 30 or 300) * (i - 1), y = sp.y + (ground and 30 or 300) * (i - 1) }
       units[i] = { name = gname .. "-" .. i, type = v.type,
-        x = sp.x - (ground and 30 or 300) * (i - 1), y = sp.y + (ground and 30 or 300) * (i - 1),
+        x = up.x, y = up.y,
         alt = ground and land.getHeight(sp) or (overBase and land.getHeight(sp) + c.scrambleAlt) or cap.alt,
         alt_type = "BARO", speed = ground and 0 or (overBase and cap.speed * 0.7) or cap.speed,
         heading = dir, skill = td.skill or D.cfg.skill,
@@ -6626,12 +6659,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.81 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.82 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.81 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.82 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
