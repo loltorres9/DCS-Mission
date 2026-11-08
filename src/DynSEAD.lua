@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.71 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.72 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -638,6 +638,12 @@ D.cfg = {
     -- (D.samSpotClear: Hangneigung, Berge, Bebauung) und unter den Kandidaten der höchstgelegene;
     -- Waffen frei, volle Einsatzreichweite, kein Ausweichen bei Beschuss, Optionen werden bei jeder Prüfung erneuert
     candidates   = 8,              -- geprüfte freie Standorte, davon der höchste
+    -- v4.72 (Nutzer: „Patriot im Wald gespawnt“; DCS kann Wald nicht abfragen): bevorzugt auf dem Flugplatzgelände
+    -- neben der Startbahn (dort wachsen keine Bäume), seitlich runwayOffset m von der Bahnmitte,
+    -- mindestens parkingClear m von Abstellplätzen; nur ohne Bahndaten der alte Suchkreis (dist)
+    runwayOffset   = {300, 450},
+    parkingClear   = 200,
+    launcherRadius = 70,           -- Startgeräte im Kreis um die Stellung (vorher 120 m)
   },
 
   -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
@@ -2874,8 +2880,45 @@ local function patriotOptions(gname)
   end
 end
 
+-- Kandidaten auf dem Flugplatzgelände neben den Startbahnen (Airbase:getRunways, course = negativer Kurs in rad)
+local function patriotRunwaySpots(base)
+  local c = D.cfg.bluePatriot
+  local out = {}
+  local ab = base.name and Airbase.getByName(base.name)
+  if not ab then return out end
+  local okR, rws = pcall(function() return ab:getRunways() end)
+  if not okR or type(rws) ~= "table" then return out end
+  local okP, park = pcall(function() return ab:getParking() end)
+  park = (okP and type(park) == "table") and park or {}
+  for _, rw in ipairs(rws) do
+    if rw.position and rw.course and rw.length then
+      local mid, hdg = toV2(rw.position), -rw.course
+      for _ = 1, 15 do
+        local along = (math.random() - 0.5) * rw.length * 0.8
+        local side = (math.random() < 0.5 and 1 or -1) * randRange(c.runwayOffset)
+        local p = offset(offset(mid, hdg, along), hdg + math.pi / 2, side)
+        local ok = okGround(p) and land.getSurfaceType(p) == land.SurfaceType.LAND
+        for _, sp in ipairs(park) do
+          if not ok then break end
+          if sp.vTerminalPos and dist(p, toV2(sp.vTerminalPos)) < c.parkingClear then ok = false end
+        end
+        if ok then out[#out + 1] = p end
+      end
+    end
+  end
+  return out
+end
+
 local function patriotSpot(base)
   local c = D.cfg.bluePatriot
+  -- 1. Wahl: neben der Startbahn; Standorte, die auch die Gebäude-/Horizontprüfung bestehen, bevorzugt
+  local rw = patriotRunwaySpots(base)
+  if #rw > 0 then
+    for _, p in ipairs(rw) do
+      if D.samSpotClear(p) then return p end
+    end
+    return rw[math.random(#rw)]
+  end
   local best, bestH, n = nil, -math.huge, 0
   for i = 1, 60 do
     local p = offset(base, math.random() * 2 * math.pi, randRange(c.dist))
@@ -2900,7 +2943,7 @@ local function spawnPatriot(base)
       for i, t in ipairs(c.units) do
         local o
         if t == "Patriot ln" then
-          o = offset(p, hdg + (i - 6) * math.pi / 2, 120)      -- Startgeräte im Kreis um die Stellung
+          o = offset(p, hdg + (i - 6) * math.pi / 2, c.launcherRadius or 70)      -- Startgeräte im Kreis um die Stellung
         else
           o = offset(p, hdg + math.pi, 25 * i)                 -- Radar, Gefechtsstand, Strom, Antenne in einer Reihe
         end
@@ -6187,12 +6230,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.71 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.72 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.71 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.72 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
