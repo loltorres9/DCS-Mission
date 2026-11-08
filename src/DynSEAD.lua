@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.73 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.74 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -472,8 +472,17 @@ D.cfg = {
     -- Straßennähe: Wälder lassen sich in DCS nicht abfragen, an Straßen und Feldwegen ist das Gelände meist offen.
     -- SAM-Stellungen werden daher (im ersten Durchlauf) an eine Stelle roadDist m neben die nächste Straße verschoben.
     nearRoad       = true,
-    roadDist       = {60, 250},    -- Abstand zur Straße (m): nicht direkt auf der Straße, aber nah dran
+    roadDist       = {5, 25},      -- Abstand zur Straße (m); v4.74: vorher 60–250 m, dort stand oft schon Wald
     roadMaxShift   = 6000,         -- weiter als so viele m wird ein Standort für die Straßennähe nicht verschoben
+    -- v4.74 (Nutzer: „im Wald spawnen ist ein Riesenproblem, ebenso in Gebäuden“): DCS kann Wald nicht abfragen, auf der
+    -- Fahrbahn wachsen aber keine Bäume. Jede stehende Bodengruppe (ohne Route, nicht ausgenommen) wird daher entlang der
+    -- nächsten Straße aufgereiht (D.addGround -> D.roadLine): Fahrzeuge im Abstand roadSpacing auf der Fahrbahn, keine Stelle
+    -- mit Gebäuden/Brücken im Umkreis buildingRadius. Liegt keine Straße innerhalb roadSnapMax, bleibt die Aufstellung,
+    -- aber Fahrzeuge in/an Gebäuden werden bis zu 60 m verschoben.
+    roadSnap       = true,
+    roadSnapMax    = 3000,
+    roadSpacing    = 35,
+    buildingRadius = 18,
   },
 
   fortress = {
@@ -938,7 +947,96 @@ local function groupAliveCount(gname)
 end
 
 -- Bodengruppen so vollständig wie Editor-Gruppen anlegen (Gruppen-x/y, Startwegpunkt, Editor-Felder).
+-- Steht hier ein Gebäude/Szenerie-Objekt (Gebäude, Brücke, Mast) im Umkreis r?
+local function sceneryAt(p, r)
+  local found = false
+  pcall(function()
+    world.searchObjects(Object.Category.SCENERY,
+      { id = world.VolumeType.SPHERE, params = { point = { x = p.x, y = land.getHeight(p), z = p.y }, radius = r } },
+      function() found = true return false end)
+  end)
+  return found
+end
+
+local function roadPoint(p)
+  local ok, x, y = pcall(land.getClosestPointOnRoads, "roads", p.x, p.y)
+  if ok and type(x) == "number" and type(y) == "number" then return { x = x, y = y } end
+  return nil
+end
+
+-- n Punkte auf der Fahrbahn der nächsten Straße um c (in beide Richtungen der Straße entlang, folgt Kurven);
+-- nil, wenn keine Straße nah genug ist oder die Straße zu kurz ist
+function D.roadLine(c, n, spacing, maxShift)
+  local cfg = D.cfg.siting
+  local r = roadPoint(c)
+  if not r or math.sqrt((r.x - c.x) ^ 2 + (r.y - c.y) ^ 2) > maxShift then return nil end
+  local function d2(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2) end
+  -- Straßenrichtung: in welcher Richtung führt die Fahrbahn am weitesten weg
+  local bestH, bestD
+  for k = 0, 7 do
+    local h = k * math.pi / 4
+    local q = roadPoint({ x = r.x + spacing * math.cos(h), y = r.y + spacing * math.sin(h) })
+    if q then
+      local d = d2(r, q)
+      if not bestD or d > bestD then bestD, bestH = d, math.atan2(q.y - r.y, q.x - r.x) end
+    end
+  end
+  if not bestH or bestD < spacing * 0.5 then return nil end
+  local pts = {}
+  local function free(q)
+    for _, o in ipairs(pts) do if d2(o, q) < spacing * 0.6 then return false end end
+    return not sceneryAt(q, cfg.buildingRadius)
+  end
+  if free(r) then pts[1] = { x = r.x, y = r.y, hdg = bestH } end
+  local ends = { { p = r, h = bestH, on = true }, { p = r, h = bestH + math.pi, on = true } }
+  for step = 1, n * 8 do
+    if #pts >= n or not (ends[1].on or ends[2].on) then break end
+    local e = ends[step % 2 + 1]
+    if e.on then
+      local q = roadPoint({ x = e.p.x + spacing * math.cos(e.h), y = e.p.y + spacing * math.sin(e.h) })
+      if not q or d2(q, e.p) < spacing * 0.5 then
+        e.on = false                                   -- Straßenende oder Sackgasse
+      else
+        e.h, e.p = math.atan2(q.y - e.p.y, q.x - e.p.x), q
+        if free(q) then pts[#pts + 1] = { x = q.x, y = q.y, hdg = e.h } end
+      end
+    end
+  end
+  if #pts < n then return nil end
+  return pts
+end
+
+-- Aufstellung einer stehenden Gruppe: auf die Straße (kein Wald) oder wenigstens aus Gebäuden heraus
+local function placeClear(data)
+  local cfg = D.cfg.siting
+  local units = data.units
+  if not cfg or not cfg.roadSnap or data.noSnap or data.route or not units or #units == 0 then return end
+  local cx, cy = 0, 0
+  for _, u in ipairs(units) do cx, cy = cx + u.x, cy + u.y end
+  local c = { x = cx / #units, y = cy / #units }
+  local pts = D.roadLine(c, #units, cfg.roadSpacing, cfg.roadSnapMax)
+  if pts then
+    -- Reihenfolge beibehalten: erste Einheit (meist Radar/Gefechtsstand) in die Mitte der Reihe
+    for i, u in ipairs(units) do
+      u.x, u.y, u.heading = pts[i].x, pts[i].y, pts[i].hdg
+    end
+    D.placement.road = D.placement.road + 1
+    return
+  end
+  D.placement.free = D.placement.free + 1
+  for _, u in ipairs(units) do
+    if sceneryAt(u, cfg.buildingRadius) then
+      for k = 1, 12 do
+        local q = { x = u.x + 60 * math.cos(k * 0.52), y = u.y + 60 * math.sin(k * 0.52) }
+        if okGround(q) and not sceneryAt(q, cfg.buildingRadius) then u.x, u.y = q.x, q.y break end
+      end
+    end
+  end
+end
+D.placement = { road = 0, free = 0 }
+
 function D.addGround(country, data)
+  placeClear(data)
   local u1 = data.units and data.units[1]
   if u1 then
     data.x = data.x or u1.x
@@ -1552,9 +1650,9 @@ function D.createSam(ao, key, p, forceMode)
     end
   end, "Radar"), nil, now + 3)
 
-  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s",
+  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s; groups on roads %d, off-road (no road near) %d",
     key, D.siting.tested, D.siting.scenery, D.siting.urban, D.siting.slope, D.siting.horizon, D.siting.zone,
-    D.siting.apiFailed and " (scenery search unavailable)" or ""))
+    D.siting.apiFailed and " (scenery search unavailable)" or "", D.placement.road, D.placement.free))
   return true
 end
 
@@ -2961,7 +3059,7 @@ local function spawnAdGroup(base, p, along, def, idx)
     units[#units + 1] = { name = gname .. "-" .. i, type = t, x = o.x, y = o.y, heading = hdg,
                           skill = "Excellent", playerCanDrive = false }
   end
-  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units })
+  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units, noSnap = true })
   local g = Group.getByName(gname)
   if not (g and g:isExist()) then return nil end
   patriotOptions(gname)
@@ -3442,7 +3540,7 @@ function D.spawnCsar(p, name, force)
   if #D.csars >= c.maxActive and not force then return false end
   if not okGround(p) then return false end
   local gname = nextId("CSAR")
-  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = {
+  D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, noSnap = true, units = {
     { name = gname .. "-1", type = "Soldier M4", x = p.x, y = p.y, heading = 0, skill = "Average", playerCanDrive = false } } })
   local cs = { group = gname, pos = p, name = name, enemies = {}, spawned = timer.getTime(), nextSmoke = 0 }
   for _ = 1, math.random(c.enemyGroups[1], c.enemyGroups[2]) do
@@ -6263,12 +6361,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.73 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.74 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.73 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.74 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
