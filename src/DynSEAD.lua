@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.77 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.78 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -668,7 +668,11 @@ D.cfg = {
     -- 1. Wahl ist jetzt eine Reihe parallel zur Startbahn auf dem Grasstreifen zwischen Bahn und Rollweg, lineOffset m
     -- neben der Bahnmitte, lineSpacing m Abstand, Lücke lineGap zwischen den Gruppen; jeder Punkt muss Gras/Boden sein
     -- (keine Bahn-/Rollwegfläche im Umkreis 15 m), ≥ lineParking m von Abstellplätzen, kein Gebäude im Umkreis 18 m
-    lineOffset   = {95, 125},
+    lineOffset   = {95, 125},      -- nur, wenn kein Rollweg gefunden wird
+    -- v4.78 (Nutzer: „am besten zwischen Startbahn und Taxiway“): von der Bahnkante seitlich nach außen tasten, bis wieder
+    -- Bahnfläche kommt (Rollweg); die Reihe steht in der Mitte dazwischen (Lücke mindestens taxiMinGap m, Suche bis taxiScan m)
+    taxiScan     = 350,
+    taxiMinGap   = 50,
     lineSpacing  = 30,
     lineGap      = 60,
     lineParking  = 120,
@@ -3104,13 +3108,29 @@ local function patriotRunwayLine(base)
     end
     return not sceneryAt(q, D.cfg.siting.buildingRadius or 18)
   end
+  -- seitlicher Abstand der Reihe: Mitte zwischen Bahnkante und Rollweg (nil = kein Rollweg gefunden)
+  local function taxiMiddle(mid, hdg, along, side, width)
+    local edge = (width or 45) / 2
+    local base = offset(mid, hdg, along)
+    local d = edge + 5
+    while d <= edge + 40 and not surfaceOk(offset(base, hdg + math.pi / 2, side * d)) do d = d + 5 end  -- Bahnschulter
+    local grass = d
+    while d <= c.taxiScan do
+      if not surfaceOk(offset(base, hdg + math.pi / 2, side * d)) then
+        if d - grass >= c.taxiMinGap then return (grass + d) / 2 end
+        return nil
+      end
+      d = d + 5
+    end
+    return nil
+  end
   for _ = 1, 40 do
     local rw = rws[math.random(#rws)]
     if rw.position and rw.course and rw.length and rw.length > length + 200 then
       local mid, hdg = toV2(rw.position), -rw.course
       local side = (math.random() < 0.5 and 1 or -1)
-      local lat = randRange(c.lineOffset)
       local start = (math.random() - 0.5) * (rw.length - length - 200) - length / 2
+      local lat = taxiMiddle(mid, hdg, start + length / 2, side, rw.width) or randRange(c.lineOffset)
       local out, okAll, pos = {}, true, start
       for gi, def in ipairs(c.groups) do
         local pts = {}
@@ -6467,12 +6487,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.77 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.78 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.77 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.78 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
