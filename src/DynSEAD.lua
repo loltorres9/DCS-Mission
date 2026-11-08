@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.76 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.77 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -664,6 +664,14 @@ D.cfg = {
     runwayOffset   = {300, 450},
     parkingClear   = 200,
     launcherRadius = 70,           -- Startgeräte im Kreis um die Stellung (vorher 120 m)
+    -- v4.77 (Nutzer: „Hawk tr steht immer noch im Wald“ – 300–450 m neben der Bahn beginnt oft schon Wald):
+    -- 1. Wahl ist jetzt eine Reihe parallel zur Startbahn auf dem Grasstreifen zwischen Bahn und Rollweg, lineOffset m
+    -- neben der Bahnmitte, lineSpacing m Abstand, Lücke lineGap zwischen den Gruppen; jeder Punkt muss Gras/Boden sein
+    -- (keine Bahn-/Rollwegfläche im Umkreis 15 m), ≥ lineParking m von Abstellplätzen, kein Gebäude im Umkreis 18 m
+    lineOffset   = {95, 125},
+    lineSpacing  = 30,
+    lineGap      = 60,
+    lineParking  = 120,
   },
 
   -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
@@ -3069,9 +3077,63 @@ local function patriotSpot(base)
   return best
 end
 
-local function spawnAdGroup(base, p, along, def, idx)
+-- Reihe parallel zur Startbahn: für jede Gruppe eine Liste von Punkten (mit hdg), nil wenn keine passende Stelle
+local function surfaceOk(p)
+  local st = land.getSurfaceType(p)
+  return st == land.SurfaceType.LAND
+end
+
+local function patriotRunwayLine(base)
   local c = D.cfg.bluePatriot
-  local gp = offset(p, along, def.shift or 0)
+  local ab = base.name and Airbase.getByName(base.name)
+  if not ab then return nil end
+  local okR, rws = pcall(function() return ab:getRunways() end)
+  if not okR or type(rws) ~= "table" or #rws == 0 then return nil end
+  local okP, park = pcall(function() return ab:getParking() end)
+  park = (okP and type(park) == "table") and park or {}
+  local total = 0
+  for _, def in ipairs(c.groups) do total = total + #def.units end
+  local length = (total - 1) * c.lineSpacing + (#c.groups - 1) * c.lineGap
+  local function good(q)
+    if not surfaceOk(q) or not okGround(q) then return false end
+    for k = 0, 3 do   -- keine Bahn-/Rollwegfläche in der Nähe (Rollwege melden ebenfalls RUNWAY)
+      if not surfaceOk(offset(q, k * math.pi / 2, 15)) then return false end
+    end
+    for _, sp in ipairs(park) do
+      if sp.vTerminalPos and dist(q, toV2(sp.vTerminalPos)) < c.lineParking then return false end
+    end
+    return not sceneryAt(q, D.cfg.siting.buildingRadius or 18)
+  end
+  for _ = 1, 40 do
+    local rw = rws[math.random(#rws)]
+    if rw.position and rw.course and rw.length and rw.length > length + 200 then
+      local mid, hdg = toV2(rw.position), -rw.course
+      local side = (math.random() < 0.5 and 1 or -1)
+      local lat = randRange(c.lineOffset)
+      local start = (math.random() - 0.5) * (rw.length - length - 200) - length / 2
+      local out, okAll, pos = {}, true, start
+      for gi, def in ipairs(c.groups) do
+        local pts = {}
+        for _ in ipairs(def.units) do
+          local q = offset(offset(mid, hdg, pos), hdg + math.pi / 2, side * lat)
+          if not good(q) then okAll = false break end
+          q.hdg = hdg
+          pts[#pts + 1] = q
+          pos = pos + c.lineSpacing
+        end
+        if not okAll then break end
+        out[gi] = pts
+        pos = pos - c.lineSpacing + c.lineGap
+      end
+      if okAll then return out end
+    end
+  end
+  return nil
+end
+
+local function spawnAdGroup(base, p, along, def, idx, pts)
+  local c = D.cfg.bluePatriot
+  local gp = pts and pts[1] or offset(p, along, def.shift or 0)
   if (def.shift or 0) ~= 0 and not okGround(gp) then gp = p end
   local gname = nextId(def.prefix or "AD")
   local hdg = math.random() * 2 * math.pi
@@ -3080,7 +3142,10 @@ local function spawnAdGroup(base, p, along, def, idx)
   local units, li, oi = {}, 0, 0
   for i, t in ipairs(def.units) do
     local o
-    if t == def.launcher then
+    if pts then
+      o = pts[i]                                           -- Reihe neben der Startbahn
+      hdg = pts[i].hdg
+    elseif t == def.launcher then
       li = li + 1
       o = offset(gp, hdg + li * 2 * math.pi / math.max(nl, 1), c.launcherRadius or 70)  -- Startgeräte im Kreis
     else
@@ -3104,6 +3169,16 @@ end
 -- eine Stellung aus allen Gruppen von cfg.bluePatriot.groups an einem Standort; liefert die Liste der Gruppennamen
 local function spawnPatriot(base)
   local c = D.cfg.bluePatriot
+  -- 1. Wahl: Reihe auf dem Grasstreifen neben der Startbahn
+  local line = patriotRunwayLine(base)
+  if line then
+    local names = {}
+    for i, def in ipairs(c.groups) do
+      local gname = spawnAdGroup(base, nil, nil, def, i, line[i])
+      if gname then names[#names + 1] = gname end
+    end
+    if #names > 0 then return names end
+  end
   for _ = 1, 3 do
     local p = patriotSpot(base)
     if p then
@@ -6392,12 +6467,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.76 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.77 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.76 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.77 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
