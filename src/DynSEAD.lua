@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.78 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.79 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -484,6 +484,12 @@ D.cfg = {
     -- aber Fahrzeuge in/an Gebäuden werden bis zu 60 m verschoben.
     roadSnap       = true,
     roadSnapMax    = 3000,
+    -- v4.79 (Nutzer: „feindliche Einheiten an den Flugplätzen zwischen Runway und Taxiways und auf die Parking Areas, aufs
+    -- Flughafengelände“): rote Gruppen, deren Mitte ≤ airfieldSnap m von einem Flugplatz liegt, stehen auf dessen Gelände:
+    -- Abstellplätze (Parking) und Grasstreifen mittig zwischen Startbahn und Rollweg; Fahrzeuge ≥ airfieldMinSep auseinander
+    airfieldSnap    = 3000,
+    airfieldSpacing = 30,
+    airfieldMinSep  = 20,
     roadSpacing    = 35,
     buildingRadius = 18,
   },
@@ -1021,14 +1027,127 @@ function D.roadLine(c, n, spacing, maxShift)
   return pts
 end
 
+local function surfaceOk(p)
+  local st = land.getSurfaceType(p)
+  return st == land.SurfaceType.LAND
+end
+
+-- eben genug für ein Fahrzeug (okGround prüft 250 m weit und lehnt Punkte nahe Bahnen ab – hier nur 30 m)
+local function flatAt(p)
+  local h = land.getHeight(p)
+  for k = 0, 3 do
+    local q = { x = p.x + 30 * math.cos(k * math.pi / 2), y = p.y + 30 * math.sin(k * math.pi / 2) }
+    if math.abs(land.getHeight(q) - h) > 6 then return false end
+  end
+  return true
+end
+
+-- seitlicher Abstand (m von der Bahnmitte) der Mitte des Grasstreifens zwischen Bahn und Rollweg; nil = kein Rollweg
+local function taxiMiddle(mid, hdg, along, side, width)
+  local c = D.cfg.bluePatriot
+  local edge = (width or 45) / 2
+  local base = offset(mid, hdg, along)
+  local d = edge + 5
+  while d <= edge + 40 and not surfaceOk(offset(base, hdg + math.pi / 2, side * d)) do d = d + 5 end  -- Bahnschulter
+  local grass = d
+  while d <= (c.taxiScan or 350) do
+    if not surfaceOk(offset(base, hdg + math.pi / 2, side * d)) then
+      if d - grass >= (c.taxiMinGap or 50) then return (grass + d) / 2 end
+      return nil
+    end
+    d = d + 5
+  end
+  return nil
+end
+
+-- Stellplätze auf dem Flugplatzgelände (einmal je Platz berechnet): Abstellplätze + Grasstreifen zwischen Bahn und Rollweg
+D.afPool = {}
+local function airfieldPool(ab)
+  local name = ab:getName()
+  if D.afPool[name] then return D.afPool[name] end
+  local cfg = D.cfg.siting
+  local pool = { pts = {}, used = {} }
+  local function add(q, hdg)
+    if flatAt(q) and not sceneryAt(q, cfg.buildingRadius) then
+      q.hdg = hdg or math.random() * 2 * math.pi
+      pool.pts[#pool.pts + 1] = q
+    end
+  end
+  local okP, park = pcall(function() return ab:getParking() end)
+  if okP and type(park) == "table" then
+    for _, sp in ipairs(park) do
+      if sp.vTerminalPos then add(toV2(sp.vTerminalPos)) end
+    end
+  end
+  local okR, rws = pcall(function() return ab:getRunways() end)
+  if okR and type(rws) == "table" then
+    for _, rw in ipairs(rws) do
+      if rw.position and rw.course and rw.length then
+        local mid, hdg = toV2(rw.position), -rw.course
+        local n = math.floor(rw.length * 0.8 / cfg.airfieldSpacing)
+        for _, side in ipairs({ 1, -1 }) do
+          for i = 0, n do
+            local along = -rw.length * 0.4 + i * cfg.airfieldSpacing
+            local lat = taxiMiddle(mid, hdg, along, side, rw.width)
+            if lat then add(offset(offset(mid, hdg, along), hdg + math.pi / 2, side * lat), hdg) end
+          end
+        end
+      end
+    end
+  end
+  env.info(string.format("DynSEAD: airfield %s – %d ground spots (parking + runway/taxiway strips)", name, #pool.pts))
+  D.afPool[name] = pool
+  return pool
+end
+
+-- rote Gruppe nahe einem Flugplatz aufs Gelände stellen: Startpunkt = freier Stellplatz nächst der Gruppenmitte,
+-- weitere Fahrzeuge auf den nächstgelegenen freien Stellplätzen
+local function airfieldPlace(units, c)
+  local cfg = D.cfg.siting
+  local best, bd
+  for _, ab in ipairs(world.getAirbases() or {}) do
+    local okd, desc = pcall(function() return ab:getDesc() end)
+    if okd and desc and desc.category == Airbase.Category.AIRDROME and not D.ignoredBase(ab) then
+      local d = dist(c, toV2(ab:getPoint()))
+      if d <= cfg.airfieldSnap and (not bd or d < bd) then best, bd = ab, d end
+    end
+  end
+  if not best then return false end
+  local pool = airfieldPool(best)
+  local free = {}
+  for i, q in ipairs(pool.pts) do if not pool.used[i] then free[#free + 1] = i end end
+  if #free < #units then return false end
+  table.sort(free, function(a, b) return dist(pool.pts[a], c) < dist(pool.pts[b], c) end)
+  local seed = pool.pts[free[1]]
+  table.sort(free, function(a, b) return dist(pool.pts[a], seed) < dist(pool.pts[b], seed) end)
+  local chosen = {}
+  for _, i in ipairs(free) do
+    local q, ok = pool.pts[i], true
+    for _, j in ipairs(chosen) do if dist(pool.pts[j], q) < cfg.airfieldMinSep then ok = false break end end
+    if ok then chosen[#chosen + 1] = i end
+    if #chosen >= #units then break end
+  end
+  if #chosen < #units then return false end
+  for k, u in ipairs(units) do
+    local q = pool.pts[chosen[k]]
+    pool.used[chosen[k]] = true
+    u.x, u.y, u.heading = q.x, q.y, q.hdg
+  end
+  return true
+end
+
 -- Aufstellung einer stehenden Gruppe: auf die Straße (kein Wald) oder wenigstens aus Gebäuden heraus
-local function placeClear(data)
+local function placeClear(data, country)
   local cfg = D.cfg.siting
   local units = data.units
   if not cfg or not cfg.roadSnap or data.noSnap or data.route or not units or #units == 0 then return end
   local cx, cy = 0, 0
   for _, u in ipairs(units) do cx, cy = cx + u.x, cy + u.y end
   local c = { x = cx / #units, y = cy / #units }
+  if country == D.cfg.redCountry and airfieldPlace(units, c) then
+    D.placement.airfield = D.placement.airfield + 1
+    return
+  end
   local pts = D.roadLine(c, #units, cfg.roadSpacing, cfg.roadSnapMax)
   if pts then
     -- Reihenfolge beibehalten: erste Einheit (meist Radar/Gefechtsstand) in die Mitte der Reihe
@@ -1048,10 +1167,10 @@ local function placeClear(data)
     end
   end
 end
-D.placement = { road = 0, free = 0 }
+D.placement = { road = 0, free = 0, airfield = 0 }
 
 function D.addGround(country, data)
-  placeClear(data)
+  placeClear(data, country)
   local u1 = data.units and data.units[1]
   if u1 then
     data.x = data.x or u1.x
@@ -1665,9 +1784,9 @@ function D.createSam(ao, key, p, forceMode)
     end
   end, "Radar"), nil, now + 3)
 
-  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s; groups on roads %d, off-road (no road near) %d",
+  env.info(string.format("DynSEAD: %s placed – siting checks so far: %d tested, rejected: %d scenery, %d urban, %d slope, %d horizon, %d NOSAM zones%s; groups on airfields %d, on roads %d, off-road (no road near) %d",
     key, D.siting.tested, D.siting.scenery, D.siting.urban, D.siting.slope, D.siting.horizon, D.siting.zone,
-    D.siting.apiFailed and " (scenery search unavailable)" or "", D.placement.road, D.placement.free))
+    D.siting.apiFailed and " (scenery search unavailable)" or "", D.placement.airfield, D.placement.road, D.placement.free))
   return true
 end
 
@@ -3082,10 +3201,6 @@ local function patriotSpot(base)
 end
 
 -- Reihe parallel zur Startbahn: für jede Gruppe eine Liste von Punkten (mit hdg), nil wenn keine passende Stelle
-local function surfaceOk(p)
-  local st = land.getSurfaceType(p)
-  return st == land.SurfaceType.LAND
-end
 
 local function patriotRunwayLine(base)
   local c = D.cfg.bluePatriot
@@ -3099,7 +3214,7 @@ local function patriotRunwayLine(base)
   for _, def in ipairs(c.groups) do total = total + #def.units end
   local length = (total - 1) * c.lineSpacing + (#c.groups - 1) * c.lineGap
   local function good(q)
-    if not surfaceOk(q) or not okGround(q) then return false end
+    if not surfaceOk(q) or not flatAt(q) then return false end
     for k = 0, 3 do   -- keine Bahn-/Rollwegfläche in der Nähe (Rollwege melden ebenfalls RUNWAY)
       if not surfaceOk(offset(q, k * math.pi / 2, 15)) then return false end
     end
@@ -3109,21 +3224,6 @@ local function patriotRunwayLine(base)
     return not sceneryAt(q, D.cfg.siting.buildingRadius or 18)
   end
   -- seitlicher Abstand der Reihe: Mitte zwischen Bahnkante und Rollweg (nil = kein Rollweg gefunden)
-  local function taxiMiddle(mid, hdg, along, side, width)
-    local edge = (width or 45) / 2
-    local base = offset(mid, hdg, along)
-    local d = edge + 5
-    while d <= edge + 40 and not surfaceOk(offset(base, hdg + math.pi / 2, side * d)) do d = d + 5 end  -- Bahnschulter
-    local grass = d
-    while d <= c.taxiScan do
-      if not surfaceOk(offset(base, hdg + math.pi / 2, side * d)) then
-        if d - grass >= c.taxiMinGap then return (grass + d) / 2 end
-        return nil
-      end
-      d = d + 5
-    end
-    return nil
-  end
   for _ = 1, 40 do
     local rw = rws[math.random(#rws)]
     if rw.position and rw.course and rw.length and rw.length > length + 200 then
@@ -6487,12 +6587,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.78 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.79 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.78 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.79 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
