@@ -1,5 +1,5 @@
 --[[
-  DynSEAD v4.69 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
+  DynSEAD v4.71 – Dynamic SEAD/CAS/CAP campaign for DCS World (coop)
   ----------------------------------------------------------------------
   Benötigt KEIN MOOSE/MIST und KEINE Template-Gruppen.
 
@@ -253,6 +253,9 @@ D.cfg = {
     legLength     = 60000,
     immortal      = true,          -- AWACS unverwundbar und für Gegner unsichtbar
     respawnDelay  = 600,
+    -- v4.71 (Nutzer: „E-3 verliert Treibstoff und landet“): bei weniger als reliefFuel (Anteil) Tank oder
+    -- wenn er gelandet ist, wird er sofort durch eine frische Maschine auf Station abgelöst (gilt auch für Tanker)
+    reliefFuel    = 0.3,
   },
 
   -- Sprachausgabe von Overlord aus vorproduzierten WAV-Bausteinen (ohne SRS)
@@ -631,6 +634,10 @@ D.cfg = {
     checkInterval = 60,
     units = { "Patriot str", "Patriot ECS", "Patriot cp", "Patriot EPP", "Patriot AMG",
               "Patriot ln", "Patriot ln", "Patriot ln", "Patriot ln" },
+    -- v4.70 (Nutzer: „Patriots ignorieren Feindflieger in 20 NM“): Standort mit freiem Horizont
+    -- (D.samSpotClear: Hangneigung, Berge, Bebauung) und unter den Kandidaten der höchstgelegene;
+    -- Waffen frei, volle Einsatzreichweite, kein Ausweichen bei Beschuss, Optionen werden bei jeder Prüfung erneuert
+    candidates   = 8,              -- geprüfte freie Standorte, davon der höchste
   },
 
   -- CSAR: abgeschossene Piloten (Spieler nach Schleudersitz über Feindgebiet oder zufällig ein Verbündeter nahe einer AO)
@@ -1851,10 +1858,29 @@ function D.repositionAwacs()
   msg(cfg.callsignName .. " is repositioning to support the new AO.")
 end
 
+-- Ablösung: wenig Sprit oder gelandet (KI fliegt bei Bingo-Sprit nach Hause) -> frische Maschine auf Station
+local function needsRelief(u)
+  if not u then return false end
+  if not u:inAir() then return true end
+  local ok, f = pcall(function() return u:getFuel() end)
+  return ok and type(f) == "number" and f < (D.cfg.awacs.reliefFuel or 0.3)
+end
+
 function D.checkAwacs(now)
   local cfg = D.cfg.awacs
   if not cfg.enabled then return end
-  if D.awacsUnit() then return end
+  local u = D.awacsUnit()
+  if u and not D.awacsRespawnAt and now >= (D.awacsGrace or 0) and needsRelief(u) then
+    env.info("DynSEAD: AWACS relieved (low fuel or landed)")
+    destroyGroup(cfg.groupName)
+    if D.spawnAwacs() then
+      D.awacsGrace = now + 120     -- frisch gespawnte Maschine nicht sofort wieder prüfen
+      msg(cfg.callsignName .. " relieved on station by a fresh aircraft.")
+      return
+    end
+    u = nil
+  end
+  if u then return end
   if not D.awacsRespawnAt then
     if D.awacsSpawned then
       msg(string.format("%s is down! Replacement expected in %d min.", cfg.callsignName, math.floor(cfg.respawnDelay / 60)))
@@ -2045,7 +2071,20 @@ function D.checkTankers(now)
   if not cfg.enabled then return end
   for _, t in ipairs(cfg.list) do
     local u = supportUnit(t.name)
-    if not (u and u:inAir()) then
+    local relieved = false
+    if u and u:inAir() and now >= (t.grace or 0) and needsRelief(u) then
+      -- wenig Sprit: sofort ablösen, bevor er die Station verlässt
+      env.info("DynSEAD: tanker " .. t.name .. " relieved (low fuel)")
+      destroyGroup(t.name)
+      if D.spawnTanker(t) then
+        relieved, t.grace = true, now + 120
+        msg(string.format("%s relieved on station by a fresh tanker.", t.name))
+      else
+        t.respawnAt = now + 60
+      end
+      u = supportUnit(t.name)
+    end
+    if not relieved and not (u and u:inAir()) then
       if not t.respawnAt then
         if t.spawned then
           msg(string.format("%s is off station. Replacement expected in %d min.", t.name, math.floor(cfg.respawnDelay / 60)))
@@ -2819,11 +2858,42 @@ end
 -------------------------------------------------------------------------------
 D.patriots, D.nextPatriotCheck = {}, 0
 
+-- Feuerbereitschaft: Radar an, Waffen frei, volle Reichweite, nicht zerstreuen (Zerstreuen reißt die Batterie auseinander)
+local function patriotOptions(gname)
+  local g = Group.getByName(gname)
+  if not g or not g:isExist() then return end
+  local ctl, G = g:getController(), AI.Option.Ground
+  pcall(function() ctl:setOnOff(true) end)
+  pcall(function() ctl:setOption(G.id.ALARM_STATE, G.val.ALARM_STATE.RED) end)
+  pcall(function() ctl:setOption(G.id.ROE, G.val.ROE.OPEN_FIRE) end)
+  if G.id.AC_ENGAGEMENT_RANGE_RESTRICTION then
+    pcall(function() ctl:setOption(G.id.AC_ENGAGEMENT_RANGE_RESTRICTION, 100) end)
+  end
+  if G.id.DISPERSE_ON_ATTACK then
+    pcall(function() ctl:setOption(G.id.DISPERSE_ON_ATTACK, 0) end)
+  end
+end
+
+local function patriotSpot(base)
+  local c = D.cfg.bluePatriot
+  local best, bestH, n = nil, -math.huge, 0
+  for i = 1, 60 do
+    local p = offset(base, math.random() * 2 * math.pi, randRange(c.dist))
+    if okGround(p) and land.getSurfaceType(p) == land.SurfaceType.LAND and (i > 40 or D.samSpotClear(p)) then
+      local h = land.getHeight(p)
+      if h > bestH then best, bestH = p, h end
+      n = n + 1
+      if n >= (c.candidates or 8) or i > 40 then break end
+    end
+  end
+  return best
+end
+
 local function spawnPatriot(base)
   local c = D.cfg.bluePatriot
-  for _ = 1, 40 do
-    local p = offset(base, math.random() * 2 * math.pi, randRange(c.dist))
-    if okGround(p) and land.getSurfaceType(p) == land.SurfaceType.LAND then
+  for _ = 1, 3 do
+    local p = patriotSpot(base)
+    if p then
       local gname = nextId("PATRIOT")
       local hdg = math.random() * 2 * math.pi
       local units = {}
@@ -2840,8 +2910,10 @@ local function spawnPatriot(base)
       D.addGround(D.cfg.blueCountry, { name = gname, task = "Ground Nothing", hidden = false, units = units })
       local g = Group.getByName(gname)
       if g and g:isExist() then
-        pcall(function() g:getController():setOption(AI.Option.Ground.id.ALARM_STATE, AI.Option.Ground.val.ALARM_STATE.RED) end)
-        env.info(string.format("DynSEAD: Patriot at %s (%s)", base.name or "?", gname))
+        patriotOptions(gname)
+        -- direkt nach dem Spawn gesetzte Optionen greifen nicht immer: nach 2 s erneut
+        timer.scheduleFunction(safe(function() patriotOptions(gname) end, "Patriot"), nil, timer.getTime() + 2)
+        env.info(string.format("DynSEAD: Patriot at %s (%s), elevation %d m", base.name or "?", gname, land.getHeight(p)))
         return gname
       end
     end
@@ -2885,6 +2957,7 @@ function D.patriotTick(now)
         D.cfg.awacs.callsignName, name, math.floor(c.respawnDelay / 60)))
     end
     if not pt then pt = {}; D.patriots[name] = pt end
+    if pt.group then patriotOptions(pt.group) end
     if not pt.group and now >= (pt.retry or 0) then
       pt.group = spawnPatriot(b)
       if not pt.group then pt.retry = now + 600 end
@@ -6114,12 +6187,12 @@ local function init()
   world.addEventHandler(D.handler)
   timer.scheduleFunction(function() if not D.started then safe(D.start, "Start")() end end,
     nil, timer.getTime() + D.cfg.fallbackStart)
-  env.info("DynSEAD v4.69 loaded (mode: " .. D.cfg.mode .. ").")
+  env.info("DynSEAD v4.71 loaded (mode: " .. D.cfg.mode .. ").")
   local info = (D.cfg.mode == "airbases")
     and string.format("%d home base(s), %d objective airfields", #D.blueBases, D.targetsTotal)
     or string.format("%d AO zone(s)", #D.aos)
   trigger.action.outText(string.format(
-    "DynSEAD v4.69 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
+    "DynSEAD v4.71 loaded – %s.\nStarts on first player spawn, at the latest after %d s.",
     info, D.cfg.fallbackStart), 30)
 end
 
